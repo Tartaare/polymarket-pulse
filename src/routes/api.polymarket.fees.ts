@@ -31,10 +31,14 @@ export const Route = createFileRoute("/api/polymarket/fees")({
 });
 
 async function fetchFee(tokenId: string): Promise<[string, number | null]> {
-  const response = await fetch(`https://clob.polymarket.com/fee-rate?token_id=${encodeURIComponent(tokenId)}`, {
-    headers: { Accept: "application/json" },
-  });
-  if (!response.ok) return [tokenId, null];
-  const data = (await response.json()) as { base_fee?: number };
-  return [tokenId, typeof data.base_fee === "number" ? data.base_fee : null];
+  try {
+    const response = await fetch(`https://clob.polymarket.com/fee-rate?token_id=${encodeURIComponent(tokenId)}`, {
+      headers: { Accept: "application/json" },
+    });
+    if (!response.ok) return [tokenId, null];
+    const data = (await response.json()) as { base_fee?: number };
+    return [tokenId, typeof data.base_fee === "number" ? data.base_fee : null];
+  } catch {
+    return [tokenId, null];
+  }
 }

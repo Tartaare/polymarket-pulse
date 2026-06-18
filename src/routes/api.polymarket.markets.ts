@@ -31,30 +31,51 @@ export const Route = createFileRoute("/api/polymarket/markets")({
 
 async function fetchGammaMarkets(): Promise<GammaMarket[]> {
   const now = new Date();
-  const startMin = new Date(now.getTime() - 2 * 60 * 60_000).toISOString();
-  const endMax = new Date(now.getTime() + 2 * 60 * 60_000).toISOString();
-  const search = new URLSearchParams({
+  const endMin = new Date(now.getTime() - 60 * 60_000).toISOString();
+  const base = new URLSearchParams({
     limit: "500",
     active: "true",
+    closed: "false",
     archived: "false",
-    start_date_min: startMin,
-    end_date_max: endMax,
+    end_date_min: endMin,
     order: "endDate",
     ascending: "true",
   });
-  const [marketsResponse, eventsResponse] = await Promise.all([
-    fetch(`https://gamma-api.polymarket.com/markets?${search}`, { headers: { Accept: "application/json" } }),
-    fetch(`https://gamma-api.polymarket.com/events?${search}`, { headers: { Accept: "application/json" } }),
-  ]);
-  if (!marketsResponse.ok) throw new Error(`gamma markets ${marketsResponse.status}`);
-  const markets = (await marketsResponse.json()) as GammaMarket[];
-  const fromEvents = eventsResponse.ok ? extractEventMarkets(await eventsResponse.json()) : [];
+  const queries = ["bitcoin up down", "ethereum up down", "solana up down", "btc up down", "eth up down", "sol up down"];
+  const urls = queries.flatMap((query) => {
+    const search = new URLSearchParams(base);
+    search.set("q", query);
+    return [
+      `https://gamma-api.polymarket.com/markets?${search}`,
+      `https://gamma-api.polymarket.com/events?${search}`,
+    ];
+  });
+  const responses = await Promise.allSettled(urls.map((url) => fetchJson<unknown>(url)));
+  const markets: GammaMarket[] = [];
+  const fromEvents: GammaMarket[] = [];
+  for (const response of responses) {
+    if (response.status !== "fulfilled") continue;
+    if (Array.isArray(response.value) && response.value.some((item) => "markets" in ((item as object) ?? {}))) {
+      fromEvents.push(...extractEventMarkets(response.value));
+    } else if (Array.isArray(response.value)) {
+      markets.push(...(response.value as GammaMarket[]));
+    }
+  }
+  if (markets.length === 0 && fromEvents.length === 0) {
+    throw new Error("gamma returned no readable market payloads");
+  }
   const deduped = new Map<string, GammaMarket>();
   for (const market of [...markets, ...fromEvents]) {
     const key = market.conditionId ?? market.slug ?? market.id;
     if (key) deduped.set(key, market);
   }
   return Array.from(deduped.values());
+}
+
+async function fetchJson<T>(url: string): Promise<T> {
+  const response = await fetch(url, { headers: { Accept: "application/json" } });
+  if (!response.ok) throw new Error(`${new URL(url).hostname} ${response.status}`);
+  return (await response.json()) as T;
 }
 
 function extractEventMarkets(events: unknown): GammaMarket[] {

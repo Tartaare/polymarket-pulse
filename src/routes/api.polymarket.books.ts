@@ -35,7 +35,11 @@ export const Route = createFileRoute("/api/polymarket/books")({
 
 async function fetchBook(tokenId: string): Promise<unknown | null> {
   const url = `https://clob.polymarket.com/book?token_id=${encodeURIComponent(tokenId)}`;
-  const response = await fetch(url, { headers: { Accept: "application/json" } });
-  if (!response.ok) return null;
-  return response.json();
+  try {
+    const response = await fetch(url, { headers: { Accept: "application/json" } });
+    if (!response.ok) return null;
+    return response.json();
+  } catch {
+    return null;
+  }
 }

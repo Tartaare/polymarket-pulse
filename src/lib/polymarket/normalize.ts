@@ -49,8 +49,8 @@ export function normalizeGammaMarket(raw: GammaMarket, now = Date.now()): Market
   const outcomeIndexes = mapOutcomeIndexes(outcomesRaw);
   if (!outcomeIndexes) return null;
 
-  const startDate = parseDate(raw.startDateIso ?? raw.startDate);
-  const endDate = parseDate(raw.endDateIso ?? raw.endDate);
+  const startDate = parseDate(raw.startDate) ?? parseDate(raw.startDateIso);
+  const endDate = parseDate(raw.endDate) ?? parseDate(raw.endDateIso);
   if (!endDate) return null;
 
   const active = raw.active !== false;
