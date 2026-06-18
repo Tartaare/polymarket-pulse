@@ -3,70 +3,40 @@ import {
   Outlet,
   Link,
   createRootRouteWithContext,
-  useRouter,
   HeadContent,
   Scripts,
 } from "@tanstack/react-router";
-import { useEffect, type ReactNode } from "react";
+import { type ReactNode } from "react";
 
 import appCss from "../styles.css?url";
-import { reportLovableError } from "../lib/lovable-error-reporting";
+import "@fontsource/inter/400.css";
+import "@fontsource/inter/500.css";
+import "@fontsource/inter/600.css";
+import "@fontsource/inter/700.css";
+import "@fontsource/jetbrains-mono/400.css";
+import "@fontsource/jetbrains-mono/500.css";
+import "@fontsource/jetbrains-mono/600.css";
+import { Toaster } from "@/components/ui/sonner";
+import { useSimEngine } from "@/lib/store/use-sim-engine";
 
 function NotFoundComponent() {
   return (
-    <div className="flex min-h-screen items-center justify-center bg-background px-4">
-      <div className="max-w-md text-center">
-        <h1 className="text-7xl font-bold text-foreground">404</h1>
-        <h2 className="mt-4 text-xl font-semibold text-foreground">Page not found</h2>
-        <p className="mt-2 text-sm text-muted-foreground">
-          The page you're looking for doesn't exist or has been moved.
-        </p>
-        <div className="mt-6">
-          <Link
-            to="/"
-            className="inline-flex items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
-          >
-            Go home
-          </Link>
-        </div>
+    <div className="flex min-h-screen items-center justify-center px-4">
+      <div className="text-center">
+        <h1 className="text-5xl font-bold">404</h1>
+        <p className="mt-2 text-sm text-muted-foreground">Market not found.</p>
+        <Link to="/" className="mt-4 inline-block text-primary hover:underline">Back to markets</Link>
       </div>
     </div>
   );
 }
 
-function ErrorComponent({ error, reset }: { error: Error; reset: () => void }) {
-  console.error(error);
-  const router = useRouter();
-  useEffect(() => {
-    reportLovableError(error, { boundary: "tanstack_root_error_component" });
-  }, [error]);
-
+function ErrorComponent({ error }: { error: Error }) {
   return (
-    <div className="flex min-h-screen items-center justify-center bg-background px-4">
+    <div className="flex min-h-screen items-center justify-center px-4">
       <div className="max-w-md text-center">
-        <h1 className="text-xl font-semibold tracking-tight text-foreground">
-          This page didn't load
-        </h1>
-        <p className="mt-2 text-sm text-muted-foreground">
-          Something went wrong on our end. You can try refreshing or head back home.
-        </p>
-        <div className="mt-6 flex flex-wrap justify-center gap-2">
-          <button
-            onClick={() => {
-              router.invalidate();
-              reset();
-            }}
-            className="inline-flex items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
-          >
-            Try again
-          </button>
-          <a
-            href="/"
-            className="inline-flex items-center justify-center rounded-md border border-input bg-background px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-accent"
-          >
-            Go home
-          </a>
-        </div>
+        <h1 className="text-lg font-semibold">Something broke.</h1>
+        <p className="mt-2 text-xs text-muted-foreground font-mono">{error.message}</p>
       </div>
     </div>
   );
@@ -77,21 +47,11 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
     meta: [
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
-      { title: "Lovable App" },
-      { name: "description", content: "Lovable Generated Project" },
-      { name: "author", content: "Lovable" },
-      { property: "og:title", content: "Lovable App" },
-      { property: "og:description", content: "Lovable Generated Project" },
-      { property: "og:type", content: "website" },
-      { name: "twitter:card", content: "summary" },
-      { name: "twitter:site", content: "@Lovable" },
+      { title: "Polysim — Polymarket-style crypto paper trading" },
+      { name: "description", content: "Paper trading des marchés Up/Down crypto 5m & 15m." },
+      { name: "theme-color", content: "#0b0e11" },
     ],
-    links: [
-      {
-        rel: "stylesheet",
-        href: appCss,
-      },
-    ],
+    links: [{ rel: "stylesheet", href: appCss }],
   }),
   shellComponent: RootShell,
   component: RootComponent,
@@ -102,24 +62,64 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
 function RootShell({ children }: { children: ReactNode }) {
   return (
     <html lang="en">
-      <head>
-        <HeadContent />
-      </head>
-      <body>
-        {children}
-        <Scripts />
-      </body>
+      <head><HeadContent /></head>
+      <body>{children}<Scripts /></body>
     </html>
   );
 }
 
 function RootComponent() {
   const { queryClient } = Route.useRouteContext();
-
   return (
     <QueryClientProvider client={queryClient}>
-      {/* Required: nested routes render here. Removing <Outlet /> breaks all child routes. */}
-      <Outlet />
+      <AppShell />
     </QueryClientProvider>
+  );
+}
+
+function AppShell() {
+  useSimEngine();
+  return (
+    <div className="min-h-screen bg-background text-foreground">
+      <Header />
+      <main className="mx-auto max-w-7xl px-4 py-4">
+        <Outlet />
+      </main>
+      <Toaster theme="dark" position="bottom-right" />
+    </div>
+  );
+}
+
+function Header() {
+  return (
+    <header className="border-b border-hairline bg-surface/60 backdrop-blur sticky top-0 z-30">
+      <div className="mx-auto max-w-7xl px-4 h-14 flex items-center gap-6">
+        <Link to="/" className="flex items-center gap-2">
+          <div className="h-7 w-7 rounded bg-primary flex items-center justify-center text-primary-foreground font-black text-sm">P</div>
+          <span className="font-bold tracking-tight">polysim<span className="text-primary">_</span></span>
+        </Link>
+        <nav className="flex items-center gap-1 text-sm">
+          <Link
+            to="/"
+            activeOptions={{ exact: true }}
+            activeProps={{ className: "bg-accent text-foreground" }}
+            className="px-3 py-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition"
+          >
+            Markets
+          </Link>
+          <Link
+            to="/portfolio"
+            activeProps={{ className: "bg-accent text-foreground" }}
+            className="px-3 py-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition"
+          >
+            Portfolio
+          </Link>
+        </nav>
+        <div className="ml-auto text-xs text-muted-foreground hidden sm:flex items-center gap-2">
+          <span className="h-2 w-2 rounded-full bg-up animate-pulse" />
+          Live · Binance feed
+        </div>
+      </div>
+    </header>
   );
 }
