@@ -1,135 +1,115 @@
 # Polysim
 
-Application locale non-commerciale de paper trading pour les marchés crypto Up/Down de Polymarket.
+Application locale non-commerciale de paper trading pour s'entraîner sur les vrais marchés crypto Up/Down de Polymarket.
 
 ## Présentation
 
-`Polysim` propose un environnement de paper trading en temps réel pour trois actifs crypto : BTC, ETH et SOL.
+`Polysim` utilise les APIs publiques Polymarket pour découvrir les marchés crypto Up/Down, maintenir les carnets CLOB en temps réel et simuler des ordres paper contre la liquidité visible.
 
-- Marchés `Up` vs `Down` basés sur le prix spot Binance/USDT.
-- Fenêtres de trading de 5 et 15 minutes.
-- Carnet d'ordres simulé, exécution partielle et correspondance d'ordres.
-- Portefeuille virtuel avec cash, positions, ordres ouverts et historique de trades.
-- État persisté dans `localStorage` pour reprendre votre session.
+- Discovery Gamma API / Events API pour BTC, ETH et SOL.
+- Horizons `5m`, `15m` et `1h` quand ils existent sur Polymarket.
+- Carnets CLOB réels via REST bootstrap et WebSocket market channel.
+- Paper execution locale : `MARKET`, `LIMIT`, `FOK`, `FAK`, `GTC`, `GTD`, post-only, partial fills.
+- Frais par token via `/fee-rate`, avec fallback sur les champs marché Gamma.
+- Portefeuille virtuel persisté en IndexedDB : ordres, fills, positions, equity curve et snapshots récents.
 
 ## Fonctionnalités utilisateur
 
-- Page `Markets` : liste des marchés en cours, filtres par actif et horizon, recherche.
-- Page `Portfolio` : suivi de l'équité, cash, PnL, positions ouvertes, ordres ouverts, historique et positions fermées.
-- Détail marché : graphique de prix, carnets d'ordres `UP` / `DOWN`, ticket d'ordre.
-- Ordres pris en charge : `MARKET`, `LIMIT`, `FOK` et `LIMIT post-only`.
-- Rachat manuel des positions gagnantes après résolution du marché.
-- Réinitialisation du portefeuille à $10 000 disponible.
+- Page `Markets` : filtres par actif, horizon, statut et recherche slug/question/token.
+- Page détail marché : conditionId, token IDs, état CLOB, bid/ask, spread, mid, liquidité visible et derniers fills paper.
+- Ticket d'ordre : estimation coût/produit, frais, slippage, break-even, expiration GTD et validation post-only.
+- Page `Portfolio` : cash, réservé, PnL brut/net, frais, positions, ordres ouverts, historique et export CSV.
+- Rachat paper des positions après résolution reçue depuis le WebSocket Polymarket.
 
 ## Comment ça marche
 
 ### Marchés
 
-- Trois actifs surveillés : `BTC`, `ETH`, `SOL`.
-- Deux horizons : `5m` et `15m`.
-- Chaque marché ouvre à l'instant courant aligné sur la fenêtre (`currentWindowOpen`).
-- `priceToBeat` est le prix d'ouverture.
-- Le marché se résout à la fin de la fenêtre : si le prix actuel est supérieur au `priceToBeat`, le résultat est `UP`, sinon `DOWN`.
+- Le client appelle `/api/polymarket/markets`.
+- La route serveur interroge `https://gamma-api.polymarket.com/markets` et `https://gamma-api.polymarket.com/events`.
+- Les marchés sont normalisés avec `slug`, `conditionId`, `clobTokenIds`, `startDate`, `endDate`, `active`, `closed`, `archived`, `outcomes` et `outcomePrices`.
+- Les statuts sont dérivés localement : `upcoming`, `live`, `closing`, `resolved`.
+- Aucun marché n'est généré localement par fenêtre temporelle.
 
-### Prix et données
+### Carnets CLOB
 
-- Le client appelle `/api/prices` toutes les 2 secondes via la route serveur.
-- La page exécute un `tick()` toutes les 500 ms pour mettre à jour les marchés ouverts, l'historique et les carnets d'ordres.
-- Si Binance échoue, la route effectue une tentative de secours vers Coinbase.
+- `/api/polymarket/books` bootstrap les carnets via `https://clob.polymarket.com/book`.
+- Le navigateur souscrit à `wss://ws-subscriptions-clob.polymarket.com/ws/market` par token ID.
+- Les événements gérés sont `book`, `price_change`, `last_trade_price`, `best_bid_ask`, `new_market` et `market_resolved`.
+- Les carnets locaux recalculent best bid, best ask, spread, mid et liquidité visible.
 
-### Carnet d'ordres
+### Paper trading
 
-- Les carnets `UP` et `DOWN` sont construits en interne à partir d'une probabilité implicite de gain.
-- Les ordres `MARKET` et `FOK` peuvent exécuter instantanément tout ou partie d'un ordre existant.
-- Les ordres `LIMIT` reposent sur le carnet et peuvent se remplir partiellement au fil du temps.
-- Les ordres `LIMIT post-only` sont refusés s'ils traversent le meilleur prix.
+- `MARKET BUY` consomme les asks.
+- `MARKET SELL` consomme les bids.
+- `LIMIT` peut reposer ou s'exécuter si marketable.
+- `FOK` exige le remplissage complet immédiat.
+- `FAK` accepte un remplissage partiel immédiat.
+- `GTC` reste ouvert jusqu'à annulation/résolution.
+- `GTD` expire à l'heure choisie.
+- Les statuts d'ordre sont `OPEN`, `PARTIALLY_FILLED`, `FILLED`, `CANCELLED`, `EXPIRED`, `REJECTED`.
 
-### Trading
+### Frais et PnL
 
-- `BUY` : vous achetez des parts de l'issue choisie.
-- `SELL` : vous vendez des parts que vous détenez déjà.
-- Les coûts estimés, frais et liquidité sont affichés dans le ticket d'ordre.
-- Le portefeuille réserve le cash nécessaire aux ordres en attente.
+- Les frais taker utilisent `fee = shares * feeRate * price * (1 - price)`.
+- Les frais sont arrondis à 5 décimales.
+- Le portefeuille suit PnL brut, PnL net, ROI implicite, break-even, frais payés et payout attendu.
 
-### Portefeuille
+### Persistance
 
-- `cash` : liquidités disponibles.
-- `reserved` : cash bloqué pour ordres en attente.
-- `positions` : parts détenues par marché et par issue.
-- `orders` : ordres ouverts, partiellement remplis ou annulés.
-- `fills` : historique des exécutions.
-- Les positions gagnantes peuvent être rachetées après résolution pour convertir en cash.
+- IndexedDB stocke l'état applicatif courant sous `polysim-polymarket-v1`.
+- Les snapshots de carnet récents sont conservés pour replay v1 local.
+- Une migration douce lit l'ancienne clé `localStorage` `polysim-v1` si IndexedDB est vide.
 
 ## Installation
 
-1. Clonez le dépôt.
-2. Ouvrez le dossier du projet.
-3. Installez les dépendances :
+1. Installez les dépendances :
 
 ```bash
 npm install
 ```
 
-4. Lancez l'application en local :
+2. Lancez l'application :
 
 ```bash
 npm run dev
 ```
 
-5. Ouvrez le navigateur sur l'URL indiquée par Vite, généralement `http://localhost:5173`.
+3. Ouvrez l'URL Vite indiquée, généralement `http://localhost:5173`.
 
 ## Scripts utiles
 
-- `npm run dev` : démarre le serveur de développement Vite.
-- `npm run build` : génère le build de production.
-- `npm run preview` : prévisualise le build de production.
-- `npm run lint` : lance ESLint sur le code.
-- `npm run format` : formate le code avec Prettier.
+- `npm run dev` : serveur de développement.
+- `npm run build` : build de production.
+- `npm run preview` : prévisualisation du build.
+- `npm run lint` : ESLint.
+- `npm run format` : Prettier.
+- `npx tsc --noEmit` : vérification TypeScript.
 
 ## Architecture principale
 
 ### Routes
 
-- `src/routes/index.tsx` : page de navigation et filtres des marchés.
-- `src/routes/market.$marketId.tsx` : page de détail d'un marché.
-- `src/routes/portfolio.tsx` : vue portefeuille et historique.
-- `src/routes/api.prices.ts` : route serveur pour récupérer les prix spot.
-- `src/routes/__root.tsx` : shell global de l'application.
+- `src/routes/index.tsx` : discovery et filtres marchés.
+- `src/routes/market.$marketId.tsx` : détail marché, carnets et ticket d'ordre.
+- `src/routes/portfolio.tsx` : portefeuille, PnL, export CSV.
+- `src/routes/api.polymarket.markets.ts` : proxy Gamma markets/events.
+- `src/routes/api.polymarket.books.ts` : proxy CLOB books.
+- `src/routes/api.polymarket.fees.ts` : proxy fee rates.
 
-### Simulation
+### Domaine
 
-- `src/lib/store/sim-store.ts` : store global, persistance, cycle de vie du marché, ordre et portefeuille.
-- `src/lib/store/use-sim-engine.ts` : initialisation du flux de prix et du tick loop.
-- `src/lib/feed/binance-ws.ts` : collecte des prix spot via l'API serveur.
-- `src/lib/sim/resolution.ts` : logique de création et de résolution des marchés.
-- `src/lib/sim/orderbook.ts` : génération des carnets d'ordres simulés.
-- `src/lib/sim/matching.ts` : matching des ordres, frais, coût estimé.
-- `src/lib/sim/portfolio.ts` : appliqué des fills, calcul des réserves et PnL.
-
-### Composants UI
-
-- `src/components/market/MarketCard.tsx` : vignette marché.
-- `src/components/market/OrderTicket.tsx` : formulaire de placement d'ordre.
-- `src/components/market/OrderBookTable.tsx` : carnet d'ordres.
-- `src/components/market/PriceChart.tsx` : graphique de prix.
-- `src/components/market/Countdown.tsx` : compte à rebours de clôture.
+- `src/lib/polymarket/normalize.ts` : parsing et normalisation Gamma.
+- `src/lib/feed/polymarket-clob-ws.ts` : WebSocket market channel.
+- `src/lib/sim/orderbook.ts` : reducers de carnets CLOB.
+- `src/lib/sim/matching.ts` : moteur paper pur.
+- `src/lib/sim/portfolio.ts` : positions, réserves et PnL.
+- `src/lib/store/sim-store.ts` : orchestration discovery, CLOB, ordres et portefeuille.
+- `src/lib/store/indexed-db.ts` : persistance IndexedDB.
 
 ## Notes importantes
 
-- Il s'agit d'une application de paper trading : aucun ordre réel n'est envoyé sur Binance.
-- Le portefeuille est virtuel et commence avec `$10 000`.
-- L'état est stocké dans `localStorage` sous la clé `polysim-v1`.
-- La logique de marché est déterministe pour chaque fenêtre temporelle et ne reflète pas un marché réel.
-
-## Développement
-
-- Le projet utilise React 19, TypeScript, Vite, Tailwind CSS, et TanStack Start/Router.
-- `routeTree.gen.ts` est auto-généré : ne pas modifier manuellement.
-- Le code dépend fortement du store global `useSimStore` et de la boucle de tick côté client.
-
-## À améliorer / idées
-
-- Ajouter une authentification ou un multi-utilisateur.
-- Ajouter des marchés supplémentaires ou des actifs tokenisés.
-- Affiner la logique de carnet d'ordres et le calcul des probabilités.
-- Visualiser les frais et la performance par trade.
+- Aucun ordre réel n'est envoyé à Polymarket.
+- Aucun wallet, aucune signature et aucune clé API utilisateur ne sont utilisés.
+- L'application dépend des APIs publiques Polymarket et peut être limitée par réseau, CORS proxy local ou disponibilité API.
+- Les snapshots replay sont locaux et limités; un replay analytique complet reste un sprint séparé.
