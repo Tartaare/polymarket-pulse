@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { MarketCard } from "@/components/market/MarketCard";
 import { useSimStore } from "@/lib/store/sim-store";
 import type { Asset, Market, PolymarketMarketStatus, WindowMin } from "@/lib/sim/types";
@@ -19,6 +19,7 @@ const WINDOWS: Array<WindowMin | "ALL"> = ["ALL", 5, 15, 60];
 const STATUSES: Array<PolymarketMarketStatus | "all"> = ["all", "upcoming", "live", "closing", "resolved"];
 
 function Browse() {
+  const [mounted, setMounted] = useState(false);
   const markets = useSimStore((state) => state.markets);
   const loading = useSimStore((state) => state.loadingMarkets);
   const error = useSimStore((state) => state.marketError);
@@ -28,6 +29,10 @@ function Browse() {
   const [windowFilter, setWindowFilter] = useState<WindowMin | "ALL">("ALL");
   const [statusFilter, setStatusFilter] = useState<PolymarketMarketStatus | "all">("all");
   const [query, setQuery] = useState("");
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   const list = Object.values(markets)
     .filter((market) => assetFilter === "ALL" || market.asset === assetFilter)
@@ -47,9 +52,9 @@ function Browse() {
             </p>
           </div>
           <div className="ml-auto grid grid-cols-3 gap-3 text-right text-xs">
-            <Stat label="Markets" value={String(Object.keys(markets).length)} />
-            <Stat label="CLOB" value={clobStatus} />
-            <Stat label="Live" value={String(Object.values(markets).filter((market) => market.status === "live" || market.status === "closing").length)} />
+            <Stat label="Markets" value={mounted ? String(Object.keys(markets).length) : "—"} />
+            <Stat label="CLOB" value={mounted ? clobStatus : "idle"} />
+            <Stat label="Live" value={mounted ? String(Object.values(markets).filter((market) => market.status === "live" || market.status === "closing").length) : "—"} />
           </div>
         </div>
       </section>
@@ -73,23 +78,28 @@ function Browse() {
         </button>
       </section>
 
-      {error && (
+      {mounted && error && (
         <div className="rounded-md border border-down/30 bg-down/10 p-4 text-sm text-down">
           Discovery Polymarket indisponible : {error}
         </div>
       )}
 
-      {loading && Object.keys(markets).length === 0 && (
+      {mounted && loading && Object.keys(markets).length === 0 && (
         <div className="rounded-md border border-hairline bg-surface p-4 text-sm text-muted-foreground">
           Scan Gamma API en cours…
         </div>
       )}
 
       <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-        {list.map((market) => <MarketCard key={market.id} market={market} />)}
-        {!loading && list.length === 0 && (
+        {mounted && list.map((market) => <MarketCard key={market.id} market={market} />)}
+        {mounted && !loading && list.length === 0 && (
           <div className="col-span-full rounded-md border border-hairline bg-surface p-6 text-sm text-muted-foreground">
             Aucun marché Polymarket crypto Up/Down trouvé pour ces filtres.
+          </div>
+        )}
+        {!mounted && (
+          <div className="col-span-full rounded-md border border-hairline bg-surface p-6 text-sm text-muted-foreground">
+            Initialisation du terminal Polymarket…
           </div>
         )}
       </section>
