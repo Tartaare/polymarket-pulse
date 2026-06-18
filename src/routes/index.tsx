@@ -1,112 +1,142 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useState } from "react";
-import { useSimStore } from "@/lib/store/sim-store";
 import { MarketCard } from "@/components/market/MarketCard";
-import type { Asset, WindowMin } from "@/lib/sim/types";
+import { useSimStore } from "@/lib/store/sim-store";
+import type { Asset, Market, PolymarketMarketStatus, WindowMin } from "@/lib/sim/types";
 
 export const Route = createFileRoute("/")({
   head: () => ({
     meta: [
       { title: "Markets — Polysim" },
-      { name: "description", content: "BTC, ETH, SOL — Up/Down 5m & 15m paper trading markets." },
+      { name: "description", content: "Vrais marchés Polymarket crypto Up/Down 5m, 15m et 1h." },
     ],
   }),
   component: Browse,
 });
 
-const ASSETS: (Asset | "ALL")[] = ["ALL", "BTC", "ETH", "SOL"];
-const WINDOWS: (WindowMin | "ALL")[] = ["ALL", 5, 15];
+const ASSETS: Array<Asset | "ALL"> = ["ALL", "BTC", "ETH", "SOL"];
+const WINDOWS: Array<WindowMin | "ALL"> = ["ALL", 5, 15, 60];
+const STATUSES: Array<PolymarketMarketStatus | "all"> = ["all", "upcoming", "live", "closing", "resolved"];
 
 function Browse() {
-  const markets = useSimStore((s) => s.markets);
-  const prices = useSimStore((s) => s.cryptoPrices);
+  const markets = useSimStore((state) => state.markets);
+  const loading = useSimStore((state) => state.loadingMarkets);
+  const error = useSimStore((state) => state.marketError);
+  const clobStatus = useSimStore((state) => state.clobStatus);
+  const refreshMarkets = useSimStore((state) => state.refreshMarkets);
   const [assetFilter, setAssetFilter] = useState<Asset | "ALL">("ALL");
-  const [winFilter, setWinFilter] = useState<WindowMin | "ALL">("ALL");
+  const [windowFilter, setWindowFilter] = useState<WindowMin | "ALL">("ALL");
+  const [statusFilter, setStatusFilter] = useState<PolymarketMarketStatus | "all">("all");
   const [query, setQuery] = useState("");
 
   const list = Object.values(markets)
-    .filter((m) => m.state === "OPEN")
-    .filter((m) => assetFilter === "ALL" || m.asset === assetFilter)
-    .filter((m) => winFilter === "ALL" || m.windowMin === winFilter)
-    .filter((m) => !query || m.asset.toLowerCase().includes(query.toLowerCase()))
-    .sort((a, b) => a.closeAt - b.closeAt);
-
-  const noFeed = Object.values(prices).every((p) => p === 0);
+    .filter((market) => assetFilter === "ALL" || market.asset === assetFilter)
+    .filter((market) => windowFilter === "ALL" || market.windowMin === windowFilter)
+    .filter((market) => statusFilter === "all" || market.status === statusFilter)
+    .filter((market) => matchesQuery(market, query))
+    .sort((a, b) => sortStatus(a.status) - sortStatus(b.status) || a.endDate - b.endDate);
 
   return (
     <div className="space-y-4">
       <section className="rounded-lg border border-hairline bg-surface p-4">
         <div className="flex flex-wrap items-end gap-4">
           <div>
-            <h1 className="text-xl font-bold tracking-tight">Crypto Up or Down</h1>
+            <h1 className="text-xl font-bold tracking-tight">Polymarket Crypto Up/Down</h1>
             <p className="text-xs text-muted-foreground">
-              Marchés temps réel basés sur Binance · 5 min & 15 min · paper trading
+              Discovery Gamma · CLOB temps réel · paper trading local 5m/15m/1h
             </p>
           </div>
-          <div className="ml-auto grid grid-cols-3 gap-3 text-xs">
-            {(["BTC", "ETH", "SOL"] as Asset[]).map((a) => (
-              <div key={a} className="text-right">
-                <div className="text-[10px] uppercase text-muted-foreground">{a}</div>
-                <div className="num font-semibold">
-                  {prices[a] > 0 ? `$${prices[a].toLocaleString(undefined, { maximumFractionDigits: 2 })}` : "—"}
-                </div>
-              </div>
-            ))}
+          <div className="ml-auto grid grid-cols-3 gap-3 text-right text-xs">
+            <Stat label="Markets" value={String(Object.keys(markets).length)} />
+            <Stat label="CLOB" value={clobStatus} />
+            <Stat label="Live" value={String(Object.values(markets).filter((market) => market.status === "live" || market.status === "closing").length)} />
           </div>
         </div>
       </section>
 
       <section className="flex flex-wrap items-center gap-2">
         <input
-          placeholder="Rechercher (BTC, ETH, SOL)…"
+          placeholder="Rechercher slug, question, token…"
           value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          className="flex-1 min-w-[180px] h-9 bg-surface border border-hairline rounded-md px-3 text-sm"
+          onChange={(event) => setQuery(event.target.value)}
+          className="h-9 min-w-[220px] flex-1 rounded-md border border-hairline bg-surface px-3 text-sm"
         />
-        <div className="flex gap-1">
-          {ASSETS.map((a) => (
-            <button
-              key={a}
-              onClick={() => setAssetFilter(a as any)}
-              className={`px-3 h-9 rounded-md text-xs border ${
-                assetFilter === a ? "bg-accent border-hairline" : "border-hairline text-muted-foreground hover:text-foreground"
-              }`}
-            >
-              {a}
-            </button>
-          ))}
-        </div>
-        <div className="flex gap-1">
-          {WINDOWS.map((w) => (
-            <button
-              key={w}
-              onClick={() => setWinFilter(w as any)}
-              className={`px-3 h-9 rounded-md text-xs border ${
-                winFilter === w ? "bg-accent border-hairline" : "border-hairline text-muted-foreground hover:text-foreground"
-              }`}
-            >
-              {w === "ALL" ? "Tous" : `${w}m`}
-            </button>
-          ))}
-        </div>
+        <Filter values={ASSETS} active={assetFilter} label={(value) => value} onSelect={(value) => setAssetFilter(value as Asset | "ALL")} />
+        <Filter values={WINDOWS} active={windowFilter} label={(value) => value === "ALL" ? "Tous" : value === 60 ? "1h" : `${value}m`} onSelect={(value) => setWindowFilter(value as WindowMin | "ALL")} />
+        <Filter values={STATUSES} active={statusFilter} label={(value) => value === "all" ? "États" : value} onSelect={(value) => setStatusFilter(value as PolymarketMarketStatus | "all")} />
+        <button
+          type="button"
+          onClick={() => void refreshMarkets()}
+          className="h-9 rounded-md bg-primary px-3 text-xs font-semibold text-primary-foreground"
+        >
+          Rafraîchir
+        </button>
       </section>
 
-      {noFeed && (
+      {error && (
+        <div className="rounded-md border border-down/30 bg-down/10 p-4 text-sm text-down">
+          Discovery Polymarket indisponible : {error}
+        </div>
+      )}
+
+      {loading && Object.keys(markets).length === 0 && (
         <div className="rounded-md border border-hairline bg-surface p-4 text-sm text-muted-foreground">
-          Connexion au flux de prix Binance… les marchés s'ouvriront dans quelques secondes.
+          Scan Gamma API en cours…
         </div>
       )}
 
       <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-        {list.map((m) => (
-          <MarketCard key={m.id} market={m} />
-        ))}
-        {!noFeed && list.length === 0 && (
-          <div className="col-span-full text-sm text-muted-foreground">
-            Aucun marché avec ces filtres.
+        {list.map((market) => <MarketCard key={market.id} market={market} />)}
+        {!loading && list.length === 0 && (
+          <div className="col-span-full rounded-md border border-hairline bg-surface p-6 text-sm text-muted-foreground">
+            Aucun marché Polymarket crypto Up/Down trouvé pour ces filtres.
           </div>
         )}
       </section>
     </div>
   );
+}
+
+function Filter<T extends string | number>({ values, active, label, onSelect }: {
+  values: T[];
+  active: T;
+  label: (value: T) => string;
+  onSelect: (value: T) => void;
+}) {
+  return (
+    <div className="flex gap-1">
+      {values.map((value) => (
+        <button
+          key={value}
+          type="button"
+          onClick={() => onSelect(value)}
+          className={`h-9 rounded-md border px-3 text-xs capitalize ${active === value ? "border-hairline bg-accent text-foreground" : "border-hairline text-muted-foreground"}`}
+        >
+          {label(value)}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function Stat({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <div className="text-[10px] uppercase text-muted-foreground">{label}</div>
+      <div className="num font-semibold capitalize">{value}</div>
+    </div>
+  );
+}
+
+function matchesQuery(market: Market, query: string): boolean {
+  if (!query.trim()) return true;
+  const haystack = `${market.question} ${market.slug} ${market.conditionId} ${market.clobTokenIds.UP} ${market.clobTokenIds.DOWN}`.toLowerCase();
+  return haystack.includes(query.toLowerCase());
+}
+
+function sortStatus(status: PolymarketMarketStatus): number {
+  if (status === "live") return 0;
+  if (status === "closing") return 1;
+  if (status === "upcoming") return 2;
+  return 3;
 }

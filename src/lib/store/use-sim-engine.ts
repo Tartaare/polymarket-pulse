@@ -1,21 +1,24 @@
 import { useEffect } from "react";
-import { priceFeed } from "../feed/binance-ws";
+import { polymarketClobSocket } from "../feed/polymarket-clob-ws";
 import { useSimStore } from "./sim-store";
 
-// Boots the price feed + tick loop once on mount.
 export function useSimEngine() {
   useEffect(() => {
-    priceFeed.start();
-    const id = window.setInterval(() => {
-      useSimStore.getState().tick();
-    }, 500);
-    // also re-render the store on price changes
-    const unsub = priceFeed.subscribe(() => {
-      // no-op: tick interval will pick it up
-    });
+    const store = useSimStore.getState();
+    store.init();
+    polymarketClobSocket.start();
+    const tickId = window.setInterval(() => {
+      const current = useSimStore.getState();
+      current.tick();
+      polymarketClobSocket.syncSubscriptions();
+    }, 1_000);
+    const discoveryId = window.setInterval(() => {
+      void useSimStore.getState().refreshMarkets();
+    }, 30_000);
     return () => {
-      window.clearInterval(id);
-      unsub();
+      window.clearInterval(tickId);
+      window.clearInterval(discoveryId);
+      polymarketClobSocket.stop();
     };
   }, []);
 }

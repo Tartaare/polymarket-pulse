@@ -1,77 +1,93 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { useSimStore, selectMidpoint } from "@/lib/store/sim-store";
-import { positionPnl } from "@/lib/sim/portfolio";
 import { toast } from "sonner";
+import { positionPnl } from "@/lib/sim/portfolio";
+import { selectMidpoint, useSimStore } from "@/lib/store/sim-store";
 
 export const Route = createFileRoute("/portfolio")({
   head: () => ({
     meta: [
       { title: "Portfolio — Polysim" },
-      { name: "description", content: "Positions, PnL, ordres ouverts et historique." },
+      { name: "description", content: "Positions, PnL net, ordres paper et historique IndexedDB." },
     ],
   }),
   component: PortfolioPage,
 });
 
 function PortfolioPage() {
-  const portfolio = useSimStore((s) => s.portfolio);
-  const markets = useSimStore((s) => s.markets);
-  const books = useSimStore((s) => s.books);
-  const cancelOrder = useSimStore((s) => s.cancelOrder);
-  const cancelAll = useSimStore((s) => s.cancelAll);
-  const redeem = useSimStore((s) => s.redeem);
-  const reset = useSimStore((s) => s.resetPortfolio);
+  const portfolio = useSimStore((state) => state.portfolio);
+  const markets = useSimStore((state) => state.markets);
+  const books = useSimStore((state) => state.books);
+  const cancelOrder = useSimStore((state) => state.cancelOrder);
+  const cancelAll = useSimStore((state) => state.cancelAll);
+  const redeem = useSimStore((state) => state.redeem);
+  const reset = useSimStore((state) => state.resetPortfolio);
+  const exportFillsCsv = useSimStore((state) => state.exportFillsCsv);
 
-  const positions = portfolio.positions;
-  const openPositions = positions.filter((p) => p.size > 0 && !p.redeemable);
-  const redeemable = positions.filter((p) => p.redeemable);
-  const closed = positions.filter((p) => p.redeemed || (p.size === 0 && !p.redeemable));
-
-  const openOrders = portfolio.orders.filter((o) => o.status === "OPEN" || o.status === "PARTIAL");
-  const trades = [...portfolio.fills].sort((a, b) => b.ts - a.ts).slice(0, 50);
-
-  const totalUnrealized = openPositions.reduce((acc, p) => {
-    const mid = selectMidpoint(books[p.marketId], p.outcome) ?? p.avgPrice;
-    return acc + positionPnl(p, mid).cashPnl;
+  const openPositions = portfolio.positions.filter((position) => position.size > 0 && !position.redeemable);
+  const redeemable = portfolio.positions.filter((position) => position.redeemable);
+  const closed = portfolio.positions.filter((position) => position.redeemed || (position.size === 0 && !position.redeemable));
+  const openOrders = portfolio.orders.filter((order) => order.status === "OPEN" || order.status === "PARTIALLY_FILLED");
+  const trades = [...portfolio.fills].sort((a, b) => b.ts - a.ts).slice(0, 80);
+  const fees = portfolio.fills.reduce((acc, fill) => acc + fill.fee, 0);
+  const realized = portfolio.positions.reduce((acc, position) => acc + position.realizedPnl, 0);
+  const markedValue = openPositions.reduce((acc, position) => {
+    const mid = selectMidpoint(books[position.marketId], position.outcome) ?? position.avgPrice;
+    return acc + position.size * mid;
   }, 0);
+  const equity = portfolio.cash + markedValue;
+  const netPnl = equity - 10_000;
+  const grossPnl = netPnl + fees;
 
-  const totalEquity = portfolio.cash + openPositions.reduce((a, p) => {
-    const mid = selectMidpoint(books[p.marketId], p.outcome) ?? p.avgPrice;
-    return a + p.size * mid;
-  }, 0);
+  const downloadCsv = () => {
+    const blob = new Blob([exportFillsCsv()], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `polysim-fills-${new Date().toISOString().slice(0, 10)}.csv`;
+    anchor.click();
+    URL.revokeObjectURL(url);
+  };
 
   return (
     <div className="space-y-4">
-      <header className="grid sm:grid-cols-4 gap-3">
-        <Stat title="Equity" value={`$${totalEquity.toFixed(2)}`} />
+      <header className="grid gap-3 sm:grid-cols-5">
+        <Stat title="Equity" value={`$${equity.toFixed(2)}`} />
         <Stat title="Cash" value={`$${portfolio.cash.toFixed(2)}`} sub={`Réservé $${portfolio.reserved.toFixed(2)}`} />
-        <Stat title="PnL non-réalisé" value={`$${totalUnrealized.toFixed(2)}`} accent={totalUnrealized >= 0 ? "up" : "down"} />
-        <Stat
-          title="PnL réalisé"
-          value={`$${positions.reduce((a, p) => a + p.realizedPnl, 0).toFixed(2)}`}
-        />
+        <Stat title="PnL brut" value={`$${grossPnl.toFixed(2)}`} accent={grossPnl >= 0 ? "up" : "down"} />
+        <Stat title="PnL net" value={`$${netPnl.toFixed(2)}`} accent={netPnl >= 0 ? "up" : "down"} />
+        <Stat title="Frais" value={`$${fees.toFixed(5)}`} />
       </header>
+
+      <Section title="Equity curve">
+        {portfolio.equity.length < 2 ? (
+          <Empty label="La courbe se construit après les premiers ticks." />
+        ) : (
+          <div className="flex h-24 items-end gap-1">
+            {portfolio.equity.slice(-80).map((point) => {
+              const min = Math.min(...portfolio.equity.map((item) => item.equity));
+              const max = Math.max(...portfolio.equity.map((item) => item.equity));
+              const height = max === min ? 50 : 10 + ((point.equity - min) / (max - min)) * 90;
+              return <div key={point.ts} className="flex-1 rounded-sm bg-primary/80" style={{ height: `${height}%` }} title={`$${point.equity.toFixed(2)}`} />;
+            })}
+          </div>
+        )}
+      </Section>
 
       {redeemable.length > 0 && (
         <Section title="À racheter">
           <div className="space-y-2">
-            {redeemable.map((p) => {
-              const m = markets[p.marketId];
-              const winner = m?.resolvedOutcome === p.outcome;
-              const payout = winner ? p.size : 0;
+            {redeemable.map((position) => {
+              const market = markets[position.marketId];
+              const winner = market?.resolvedOutcome === position.outcome;
+              const payout = winner ? position.size : 0;
               return (
-                <div key={`${p.marketId}-${p.outcome}`} className="flex items-center gap-3 p-3 rounded-md border border-hairline bg-surface">
-                  <div className="flex-1 min-w-0">
-                    <div className="text-sm font-semibold">{m?.asset} {m?.windowMin}m — <span className={p.outcome === "UP" ? "text-up" : "text-down"}>{p.outcome}</span></div>
-                    <div className="text-xs text-muted-foreground num">{p.size.toFixed(0)} shares @ {Math.round(p.avgPrice * 100)}¢ · Gagnant: {m?.resolvedOutcome}</div>
+                <div key={`${position.tokenId}-redeem`} className="flex items-center gap-3 rounded-md border border-hairline bg-surface-2 p-3">
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-sm font-semibold">{market?.question ?? position.marketId}</div>
+                    <div className="num text-xs text-muted-foreground">{position.size.toFixed(2)} @ {Math.round(position.avgPrice * 100)}¢ · winner {market?.resolvedOutcome ?? "—"}</div>
                   </div>
-                  <div className="num text-right">
-                    <div className={`font-semibold ${winner ? "text-up" : "text-down"}`}>${payout.toFixed(2)}</div>
-                  </div>
-                  <button
-                    onClick={() => { redeem(p.marketId, p.outcome); toast.success(`Redeem $${payout.toFixed(2)}`); }}
-                    className="px-3 py-1.5 rounded-md bg-primary text-primary-foreground text-xs font-semibold"
-                  >
+                  <div className={`num font-semibold ${winner ? "text-up" : "text-down"}`}>${payout.toFixed(2)}</div>
+                  <button type="button" onClick={() => { redeem(position.marketId, position.outcome); toast.success("Rachat paper appliqué"); }} className="rounded-md bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground">
                     Racheter
                   </button>
                 </div>
@@ -83,22 +99,23 @@ function PortfolioPage() {
 
       <Section title="Positions ouvertes">
         {openPositions.length === 0 ? <Empty /> : (
-          <Table headers={["Marché", "Outcome", "Shares", "Prix moyen", "Prix actuel", "Valeur", "PnL"]}>
-            {openPositions.map((p) => {
-              const m = markets[p.marketId];
-              const mid = selectMidpoint(books[p.marketId], p.outcome) ?? p.avgPrice;
-              const { cashPnl, currentValue, percentPnl } = positionPnl(p, mid);
+          <Table headers={["Marché", "Outcome", "Shares", "Prix moyen", "Prix actuel", "Valeur", "Break-even", "PnL net"]}>
+            {openPositions.map((position) => {
+              const market = markets[position.marketId];
+              const mid = selectMidpoint(books[position.marketId], position.outcome) ?? position.avgPrice;
+              const pnl = positionPnl(position, mid);
               return (
-                <tr key={`${p.marketId}-${p.outcome}`} className="border-t border-hairline">
-                  <td className="py-2"><Link to="/market/$marketId" params={{ marketId: p.marketId }} className="hover:underline">{m?.asset} {m?.windowMin}m</Link></td>
-                  <td className={p.outcome === "UP" ? "text-up" : "text-down"}>{p.outcome}</td>
-                  <td className="num text-right">{p.size.toFixed(0)}</td>
-                  <td className="num text-right">{Math.round(p.avgPrice * 100)}¢</td>
-                  <td className="num text-right">{Math.round(mid * 100)}¢</td>
-                  <td className="num text-right">${currentValue.toFixed(2)}</td>
-                  <td className={`num text-right ${cashPnl >= 0 ? "text-up" : "text-down"}`}>
-                    ${cashPnl.toFixed(2)} ({(percentPnl * 100).toFixed(1)}%)
+                <tr key={position.tokenId} className="border-t border-hairline">
+                  <td className="max-w-[280px] truncate py-2">
+                    <Link to="/market/$marketId" params={{ marketId: position.marketId }} className="hover:text-primary">{market?.question ?? position.marketId}</Link>
                   </td>
+                  <td className={position.outcome === "UP" ? "text-up" : "text-down"}>{position.outcome}</td>
+                  <td className="num text-right">{position.size.toFixed(2)}</td>
+                  <td className="num text-right">{Math.round(position.avgPrice * 100)}¢</td>
+                  <td className="num text-right">{Math.round(mid * 100)}¢</td>
+                  <td className="num text-right">${pnl.currentValue.toFixed(2)}</td>
+                  <td className="num text-right">{Math.round(pnl.breakEven * 100)}¢</td>
+                  <td className={`num text-right ${pnl.cashPnl >= 0 ? "text-up" : "text-down"}`}>${pnl.cashPnl.toFixed(2)}</td>
                 </tr>
               );
             })}
@@ -108,26 +125,23 @@ function PortfolioPage() {
 
       <Section
         title="Ordres ouverts"
-        right={openOrders.length > 0 && (
-          <button onClick={() => { cancelAll(); toast("Tous les ordres annulés"); }} className="text-xs text-muted-foreground hover:text-foreground">Annuler tout</button>
-        )}
+        right={openOrders.length > 0 && <button type="button" onClick={() => { cancelAll(); toast("Tous les ordres ouverts sont annulés"); }} className="text-xs text-muted-foreground hover:text-foreground">Annuler tout</button>}
       >
         {openOrders.length === 0 ? <Empty /> : (
-          <Table headers={["Marché", "Outcome", "Side", "Type", "Prix", "Size", "Rempli", ""]}>
-            {openOrders.map((o) => {
-              const m = markets[o.marketId];
+          <Table headers={["Marché", "Outcome", "Side", "Type", "TIF", "Prix", "Size", "Rempli", ""]}>
+            {openOrders.map((order) => {
+              const market = markets[order.marketId];
               return (
-                <tr key={o.id} className="border-t border-hairline">
-                  <td className="py-2">{m?.asset} {m?.windowMin}m</td>
-                  <td className={o.outcome === "UP" ? "text-up" : "text-down"}>{o.outcome}</td>
-                  <td>{o.side}</td>
-                  <td>{o.type}{o.postOnly ? " · PO" : ""}</td>
-                  <td className="num text-right">{o.limitPrice != null ? `${Math.round(o.limitPrice * 100)}¢` : "—"}</td>
-                  <td className="num text-right">{o.size.toFixed(0)}</td>
-                  <td className="num text-right">{o.filled.toFixed(0)}</td>
-                  <td className="text-right">
-                    <button onClick={() => cancelOrder(o.id)} className="text-xs text-down hover:underline">Annuler</button>
-                  </td>
+                <tr key={order.id} className="border-t border-hairline">
+                  <td className="max-w-[260px] truncate py-2">{market?.question ?? order.marketId}</td>
+                  <td className={order.outcome === "UP" ? "text-up" : "text-down"}>{order.outcome}</td>
+                  <td>{order.side}</td>
+                  <td>{order.type}{order.postOnly ? " · PO" : ""}</td>
+                  <td>{order.timeInForce}</td>
+                  <td className="num text-right">{order.limitPrice != null ? `${Math.round(order.limitPrice * 100)}¢` : "—"}</td>
+                  <td className="num text-right">{order.size.toFixed(2)}</td>
+                  <td className="num text-right">{order.filled.toFixed(2)}</td>
+                  <td className="text-right"><button type="button" onClick={() => cancelOrder(order.id)} className="text-xs text-down hover:underline">Annuler</button></td>
                 </tr>
               );
             })}
@@ -135,20 +149,25 @@ function PortfolioPage() {
         )}
       </Section>
 
-      <Section title="Historique de trades">
+      <Section
+        title="Historique de trades"
+        right={trades.length > 0 && <button type="button" onClick={downloadCsv} className="rounded-md bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground">CSV</button>}
+      >
         {trades.length === 0 ? <Empty /> : (
-          <Table headers={["Heure", "Marché", "Outcome", "Side", "Prix", "Size", "Fee"]}>
-            {trades.map((f) => {
-              const m = markets[f.marketId];
+          <Table headers={["Heure", "Marché", "Outcome", "Side", "Prix", "Size", "Fee", "Net"]}>
+            {trades.map((fill) => {
+              const market = markets[fill.marketId];
+              const net = fill.side === "BUY" ? -(fill.price * fill.size + fill.fee) : fill.price * fill.size - fill.fee;
               return (
-                <tr key={f.id} className="border-t border-hairline">
-                  <td className="py-2 text-muted-foreground text-xs num">{new Date(f.ts).toLocaleTimeString()}</td>
-                  <td>{m?.asset} {m?.windowMin}m</td>
-                  <td className={f.outcome === "UP" ? "text-up" : "text-down"}>{f.outcome}</td>
-                  <td>{f.side}</td>
-                  <td className="num text-right">{Math.round(f.price * 100)}¢</td>
-                  <td className="num text-right">{f.size.toFixed(0)}</td>
-                  <td className="num text-right text-muted-foreground">${f.fee.toFixed(4)}</td>
+                <tr key={fill.id} className="border-t border-hairline">
+                  <td className="num py-2 text-xs text-muted-foreground">{new Date(fill.ts).toLocaleTimeString()}</td>
+                  <td className="max-w-[260px] truncate">{market?.question ?? fill.marketId}</td>
+                  <td className={fill.outcome === "UP" ? "text-up" : "text-down"}>{fill.outcome}</td>
+                  <td>{fill.side}</td>
+                  <td className="num text-right">{Math.round(fill.price * 100)}¢</td>
+                  <td className="num text-right">{fill.size.toFixed(2)}</td>
+                  <td className="num text-right text-muted-foreground">${fill.fee.toFixed(5)}</td>
+                  <td className={`num text-right ${net >= 0 ? "text-up" : "text-down"}`}>${net.toFixed(2)}</td>
                 </tr>
               );
             })}
@@ -159,13 +178,13 @@ function PortfolioPage() {
       <Section title="Positions fermées">
         {closed.length === 0 ? <Empty /> : (
           <Table headers={["Marché", "Outcome", "PnL réalisé"]}>
-            {closed.map((p) => {
-              const m = markets[p.marketId];
+            {closed.map((position) => {
+              const market = markets[position.marketId];
               return (
-                <tr key={`${p.marketId}-${p.outcome}-c`} className="border-t border-hairline">
-                  <td className="py-2">{m?.asset} {m?.windowMin}m</td>
-                  <td className={p.outcome === "UP" ? "text-up" : "text-down"}>{p.outcome}</td>
-                  <td className={`num text-right ${p.realizedPnl >= 0 ? "text-up" : "text-down"}`}>${p.realizedPnl.toFixed(2)}</td>
+                <tr key={`${position.tokenId}-closed`} className="border-t border-hairline">
+                  <td className="py-2">{market?.question ?? position.marketId}</td>
+                  <td className={position.outcome === "UP" ? "text-up" : "text-down"}>{position.outcome}</td>
+                  <td className={`num text-right ${position.realizedPnl >= 0 ? "text-up" : "text-down"}`}>${position.realizedPnl.toFixed(2)}</td>
                 </tr>
               );
             })}
@@ -173,13 +192,11 @@ function PortfolioPage() {
         )}
       </Section>
 
-      <div className="pt-4">
-        <button
-          onClick={() => { if (confirm("Réinitialiser le portefeuille à $10,000 ?")) { reset(); toast("Portefeuille reset"); }}}
-          className="text-xs text-muted-foreground hover:text-down"
-        >
+      <div className="flex items-center gap-3 pt-4">
+        <button type="button" onClick={() => { if (confirm("Réinitialiser le portefeuille paper à $10,000 ?")) { reset(); toast("Portefeuille reset"); } }} className="text-xs text-muted-foreground hover:text-down">
           Réinitialiser le portefeuille
         </button>
+        <span className="text-xs text-muted-foreground">PnL réalisé: ${realized.toFixed(2)}</span>
       </div>
     </div>
   );
@@ -188,7 +205,7 @@ function PortfolioPage() {
 function Stat({ title, value, sub, accent }: { title: string; value: string; sub?: string; accent?: "up" | "down" }) {
   return (
     <div className="rounded-lg border border-hairline bg-surface p-4">
-      <div className="text-[10px] uppercase text-muted-foreground tracking-wide">{title}</div>
+      <div className="text-[10px] uppercase tracking-wide text-muted-foreground">{title}</div>
       <div className={`num text-xl font-bold ${accent === "up" ? "text-up" : accent === "down" ? "text-down" : ""}`}>{value}</div>
       {sub && <div className="text-[11px] text-muted-foreground">{sub}</div>}
     </div>
@@ -198,7 +215,7 @@ function Stat({ title, value, sub, accent }: { title: string; value: string; sub
 function Section({ title, right, children }: { title: string; right?: React.ReactNode; children: React.ReactNode }) {
   return (
     <section className="rounded-lg border border-hairline bg-surface p-4">
-      <div className="flex items-center justify-between mb-2">
+      <div className="mb-2 flex items-center justify-between">
         <h2 className="text-sm font-semibold">{title}</h2>
         {right}
       </div>
@@ -212,9 +229,9 @@ function Table({ headers, children }: { headers: string[]; children: React.React
     <div className="overflow-x-auto scrollbar-thin">
       <table className="w-full text-sm">
         <thead>
-          <tr className="text-[10px] uppercase text-muted-foreground tracking-wide">
-            {headers.map((h, i) => (
-              <th key={i} className={`py-1 ${i === 0 ? "text-left" : i > 1 ? "text-right" : "text-left"}`}>{h}</th>
+          <tr className="text-[10px] uppercase tracking-wide text-muted-foreground">
+            {headers.map((header, index) => (
+              <th key={header} className={`py-1 ${index === 0 ? "text-left" : index > 1 ? "text-right" : "text-left"}`}>{header}</th>
             ))}
           </tr>
         </thead>
@@ -224,6 +241,6 @@ function Table({ headers, children }: { headers: string[]; children: React.React
   );
 }
 
-function Empty() {
-  return <div className="text-xs text-muted-foreground py-3">Rien ici pour le moment.</div>;
+function Empty({ label = "Rien ici pour le moment." }: { label?: string }) {
+  return <div className="py-3 text-xs text-muted-foreground">{label}</div>;
 }

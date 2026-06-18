@@ -1,84 +1,129 @@
-import type { MarketBook, OutcomeBook, BookLevel, Outcome } from "./types";
-import { clampCents } from "./pricing";
+import type { BookLevel, MarketBook, OutcomeBook, Side } from "./types";
 
-// Build a synthetic order book around a fair probability (0..1).
-// Returns book with bids desc, asks asc, in cent prices (1..99).
-export function buildBook(fairUpProb: number, depth = 6, baseLiquidity = 800): MarketBook["UP"] & { dummy?: never } {
-  // unused in this signature; we expose buildOutcomeBook below
-  return buildOutcomeBook(fairUpProb, depth, baseLiquidity);
+export interface ClobBookPayload {
+  market: string;
+  asset_id: string;
+  timestamp?: string;
+  hash?: string;
+  bids: { price: string; size: string }[];
+  asks: { price: string; size: string }[];
+  min_order_size?: string;
+  tick_size?: string;
+  last_trade_price?: string;
 }
 
-function rand(seed: number): () => number {
-  let s = seed >>> 0;
-  return () => {
-    s = (s * 1664525 + 1013904223) >>> 0;
-    return s / 0xffffffff;
-  };
+export interface PriceChange {
+  asset_id: string;
+  price: string;
+  size: string;
+  side: Side;
+  best_bid?: string;
+  best_ask?: string;
+  hash?: string;
 }
 
-export function buildOutcomeBook(prob: number, depth = 6, baseLiquidity = 800, seed = 1): OutcomeBook {
-  const r = rand(seed);
-  const mid = clampCents(prob * 100);
-  // spread 1-3 cents depending on edge proximity
-  const spread = mid <= 5 || mid >= 95 ? 3 : mid <= 15 || mid >= 85 ? 2 : 1;
-  const bestBid = clampCents(mid - Math.ceil(spread / 2));
-  const bestAsk = clampCents(mid + Math.floor(spread / 2) + (spread === 1 ? 1 : 0));
-  const bids: BookLevel[] = [];
-  const asks: BookLevel[] = [];
-  for (let i = 0; i < depth; i++) {
-    const bp = clampCents(bestBid - i);
-    const ap = clampCents(bestAsk + i);
-    const decay = Math.exp(-i * 0.35);
-    bids.push({ price: bp / 100, size: Math.round(baseLiquidity * decay * (0.7 + r() * 0.6)) });
-    asks.push({ price: ap / 100, size: Math.round(baseLiquidity * decay * (0.7 + r() * 0.6)) });
-    if (bp <= 1 || ap >= 99) break;
-  }
-  // dedupe + sort
+const EMPTY_TS = 0;
+
+export function emptyOutcomeBook(tokenId: string): OutcomeBook {
   return {
-    bids: collapse(bids, "desc"),
-    asks: collapse(asks, "asc"),
+    tokenId,
+    bids: [],
+    asks: [],
+    bestBid: null,
+    bestAsk: null,
+    spread: null,
+    mid: null,
+    liquidity: 0,
+    updatedAt: EMPTY_TS,
   };
 }
 
-function collapse(levels: BookLevel[], dir: "asc" | "desc"): BookLevel[] {
-  const map = new Map<number, number>();
-  for (const l of levels) map.set(l.price, (map.get(l.price) ?? 0) + l.size);
-  const arr = Array.from(map.entries()).map(([price, size]) => ({ price, size }));
-  arr.sort((a, b) => (dir === "asc" ? a.price - b.price : b.price - a.price));
-  return arr;
-}
-
-export function buildMarketBook(marketId: string, upProb: number, ts: number, seed = 1): MarketBook {
+export function createEmptyMarketBook(marketId: string, conditionId: string, upTokenId: string, downTokenId: string): MarketBook {
   return {
     marketId,
-    UP: buildOutcomeBook(upProb, 6, 800, seed),
-    DOWN: buildOutcomeBook(1 - upProb, 6, 800, seed + 7),
-    updatedAt: ts,
+    conditionId,
+    UP: emptyOutcomeBook(upTokenId),
+    DOWN: emptyOutcomeBook(downTokenId),
+    updatedAt: Date.now(),
+    source: "clob",
   };
 }
 
-export function midpoint(b: OutcomeBook): number | null {
-  const bid = b.bids[0]?.price;
-  const ask = b.asks[0]?.price;
-  if (bid == null || ask == null) return null;
-  return (bid + ask) / 2;
+export function normalizeLevels(levels: BookLevel[], dir: "asc" | "desc"): BookLevel[] {
+  const map = new Map<number, number>();
+  for (const level of levels) {
+    if (!Number.isFinite(level.price) || !Number.isFinite(level.size) || level.size <= 0) continue;
+    map.set(level.price, (map.get(level.price) ?? 0) + level.size);
+  }
+  return Array.from(map.entries())
+    .map(([price, size]) => ({ price, size }))
+    .sort((a, b) => (dir === "asc" ? a.price - b.price : b.price - a.price));
 }
 
-export function spread(b: OutcomeBook): number | null {
-  const bid = b.bids[0]?.price;
-  const ask = b.asks[0]?.price;
-  if (bid == null || ask == null) return null;
-  return ask - bid;
+export function enrichBook(book: Omit<OutcomeBook, "bestBid" | "bestAsk" | "spread" | "mid" | "liquidity">): OutcomeBook {
+  const bids = normalizeLevels(book.bids, "desc");
+  const asks = normalizeLevels(book.asks, "asc");
+  const bestBid = bids[0]?.price ?? null;
+  const bestAsk = asks[0]?.price ?? null;
+  const spread = bestBid != null && bestAsk != null ? Math.max(0, bestAsk - bestBid) : null;
+  const mid = bestBid != null && bestAsk != null ? (bestBid + bestAsk) / 2 : null;
+  const liquidity = [...bids, ...asks].reduce((acc, level) => acc + level.price * level.size, 0);
+  return { ...book, bids, asks, bestBid, bestAsk, spread, mid, liquidity };
 }
 
-export function displayPrice(b: OutcomeBook): number | null {
-  const s = spread(b);
-  const mid = midpoint(b);
-  if (s == null || mid == null) return null;
-  if (s > 0.10 && b.lastTrade) return b.lastTrade.price;
-  return mid;
+export function bookFromClob(payload: ClobBookPayload): OutcomeBook {
+  return enrichBook({
+    tokenId: payload.asset_id,
+    bids: payload.bids.map(parseLevel),
+    asks: payload.asks.map(parseLevel),
+    lastTrade: payload.last_trade_price
+      ? { price: Number(payload.last_trade_price), size: 0, ts: Number(payload.timestamp ?? Date.now()), side: "BUY" }
+      : undefined,
+    updatedAt: Number(payload.timestamp ?? Date.now()),
+    hash: payload.hash,
+    tickSize: optionalNumber(payload.tick_size),
+    minOrderSize: optionalNumber(payload.min_order_size),
+  });
 }
 
-export function oppositeOutcome(o: Outcome): Outcome {
-  return o === "UP" ? "DOWN" : "UP";
+export function applyPriceChange(book: OutcomeBook, change: PriceChange, ts: number): OutcomeBook {
+  const price = Number(change.price);
+  const size = Number(change.size);
+  if (!Number.isFinite(price) || !Number.isFinite(size)) return book;
+  const target = change.side === "BUY" ? "bids" : "asks";
+  const nextLevels = upsertLevel(book[target], price, size);
+  return enrichBook({
+    ...book,
+    [target]: nextLevels,
+    updatedAt: ts,
+    hash: change.hash ?? book.hash,
+  });
+}
+
+export function midpoint(book: OutcomeBook): number | null {
+  return book.mid;
+}
+
+export function spread(book: OutcomeBook): number | null {
+  return book.spread;
+}
+
+export function displayPrice(book: OutcomeBook): number | null {
+  return book.mid ?? book.lastTrade?.price ?? book.bestAsk ?? book.bestBid ?? null;
+}
+
+function parseLevel(level: { price: string; size: string }): BookLevel {
+  return { price: Number(level.price), size: Number(level.size) };
+}
+
+function optionalNumber(value: string | undefined): number | undefined {
+  if (value == null || value === "") return undefined;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function upsertLevel(levels: BookLevel[], price: number, size: number): BookLevel[] {
+  const without = levels.filter((level) => Math.abs(level.price - price) > 1e-9);
+  if (size > 0) without.push({ price, size });
+  return without;
 }

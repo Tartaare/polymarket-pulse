@@ -1,63 +1,82 @@
 import { Link } from "@tanstack/react-router";
 import type { Market } from "@/lib/sim/types";
-import { useSimStore, selectDisplayPrice } from "@/lib/store/sim-store";
+import { selectDisplayPrice, useSimStore } from "@/lib/store/sim-store";
 import { Countdown } from "./Countdown";
 
 const ASSET_COLOR: Record<string, string> = {
   BTC: "bg-[#f7931a]",
   ETH: "bg-[#627eea]",
-  SOL: "bg-[#9945ff]",
+  SOL: "bg-[#14f195] text-background",
 };
 
 export function MarketCard({ market }: { market: Market }) {
-  const book = useSimStore((s) => s.books[market.id]);
-  const upPrice = selectDisplayPrice(book, "UP");
-  const downPrice = selectDisplayPrice(book, "DOWN");
-  const upPct = upPrice != null ? Math.round(upPrice * 100) : null;
-  const downPct = downPrice != null ? Math.round(downPrice * 100) : null;
-  const direction = market.currentPrice >= market.priceToBeat ? "up" : "down";
+  const book = useSimStore((state) => state.books[market.id]);
+  const upPrice = selectDisplayPrice(book, "UP") ?? market.outcomePrices.UP;
+  const downPrice = selectDisplayPrice(book, "DOWN") ?? market.outcomePrices.DOWN;
+  const liquidity = book ? book.UP.liquidity + book.DOWN.liquidity : market.liquidity;
 
   return (
     <Link
       to="/market/$marketId"
       params={{ marketId: market.id }}
-      className="block rounded-lg border border-hairline bg-surface hover:bg-surface-2 transition p-4"
+      className="block rounded-lg border border-hairline bg-surface p-4 transition hover:bg-surface-2"
     >
       <div className="flex items-center gap-3">
-        <div className={`h-9 w-9 rounded-full ${ASSET_COLOR[market.asset]} flex items-center justify-center text-white text-xs font-bold`}>
+        <div className={`flex h-9 w-9 items-center justify-center rounded-full text-xs font-bold text-white ${ASSET_COLOR[market.asset]}`}>
           {market.asset}
         </div>
-        <div className="flex-1 min-w-0">
-          <div className="text-sm font-semibold truncate">
-            {market.asset} Up or Down — {market.windowMin}m
-          </div>
-          <div className="text-xs text-muted-foreground flex items-center gap-2">
-            <span className="num">${market.priceToBeat.toLocaleString(undefined, { maximumFractionDigits: 2 })}</span>
-            <span>→</span>
-            <span className={`num ${direction === "up" ? "text-up" : "text-down"}`}>
-              ${market.currentPrice.toLocaleString(undefined, { maximumFractionDigits: 2 })}
-            </span>
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-sm font-semibold">{market.question}</div>
+          <div className="mt-0.5 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+            <span>{market.windowMin === 60 ? "1h" : `${market.windowMin}m`}</span>
+            <span>·</span>
+            <span>{statusLabel(market.status)}</span>
+            <span>·</span>
+            <span className="num">{shortId(market.conditionId)}</span>
           </div>
         </div>
         <div className="text-right">
-          <div className="text-[10px] uppercase text-muted-foreground tracking-wide">closes</div>
-          <Countdown to={market.closeAt} className="text-sm font-semibold" />
+          <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
+            {market.status === "upcoming" ? "opens" : market.status === "resolved" ? "closed" : "closes"}
+          </div>
+          {market.status === "resolved" ? (
+            <div className="text-sm font-semibold">Résolu</div>
+          ) : (
+            <Countdown to={market.status === "upcoming" ? market.startDate : market.endDate} className="text-sm font-semibold" />
+          )}
         </div>
       </div>
+
       <div className="mt-3 grid grid-cols-2 gap-2">
-        <div className="rounded-md bg-up/10 border border-up/20 px-3 py-2">
-          <div className="text-[10px] uppercase text-up tracking-wide">Up</div>
-          <div className="num text-up font-semibold">{upPct != null ? `${upPct}¢` : "—"}</div>
-        </div>
-        <div className="rounded-md bg-down/10 border border-down/20 px-3 py-2">
-          <div className="text-[10px] uppercase text-down tracking-wide">Down</div>
-          <div className="num text-down font-semibold">{downPct != null ? `${downPct}¢` : "—"}</div>
-        </div>
+        <OutcomeTile label={market.outcomeLabels.UP} price={upPrice} tone="up" />
+        <OutcomeTile label={market.outcomeLabels.DOWN} price={downPrice} tone="down" />
       </div>
-      <div className="mt-2 text-[10px] text-muted-foreground flex justify-between">
-        <span>Vol ${market.volume.toFixed(0)}</span>
-        <span>{market.windowMin}m window</span>
+
+      <div className="mt-2 flex justify-between text-[10px] text-muted-foreground">
+        <span className="num">Liq ${liquidity.toFixed(0)}</span>
+        <span className="num">Fee {(market.feeRateBps / 100).toFixed(2)}%</span>
       </div>
     </Link>
   );
+}
+
+function OutcomeTile({ label, price, tone }: { label: string; price: number | null; tone: "up" | "down" }) {
+  const color = tone === "up" ? "text-up border-up/20 bg-up/10" : "text-down border-down/20 bg-down/10";
+  return (
+    <div className={`rounded-md border px-3 py-2 ${color}`}>
+      <div className="truncate text-[10px] uppercase tracking-wide">{label}</div>
+      <div className="num font-semibold">{price != null ? `${Math.round(price * 100)}¢` : "—"}</div>
+    </div>
+  );
+}
+
+function statusLabel(status: Market["status"]): string {
+  if (status === "upcoming") return "Upcoming";
+  if (status === "closing") return "Closing";
+  if (status === "resolved") return "Resolved";
+  return "Live";
+}
+
+function shortId(value: string): string {
+  return `${value.slice(0, 6)}…${value.slice(-4)}`;
 }

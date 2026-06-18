@@ -12,7 +12,9 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as PortfolioRouteImport } from './routes/portfolio'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as MarketMarketIdRouteImport } from './routes/market.$marketId'
-import { Route as ApiPricesRouteImport } from './routes/api.prices'
+import { Route as ApiPolymarketMarketsRouteImport } from './routes/api.polymarket.markets'
+import { Route as ApiPolymarketBooksRouteImport } from './routes/api.polymarket.books'
+import { Route as ApiPolymarketFeesRouteImport } from './routes/api.polymarket.fees'
 
 const PortfolioRoute = PortfolioRouteImport.update({
   id: '/portfolio',
@@ -29,43 +31,61 @@ const MarketMarketIdRoute = MarketMarketIdRouteImport.update({
   path: '/market/$marketId',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ApiPricesRoute = ApiPricesRouteImport.update({
-  id: '/api/prices',
-  path: '/api/prices',
+const ApiPolymarketMarketsRoute = ApiPolymarketMarketsRouteImport.update({
+  id: '/api/polymarket/markets',
+  path: '/api/polymarket/markets',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiPolymarketBooksRoute = ApiPolymarketBooksRouteImport.update({
+  id: '/api/polymarket/books',
+  path: '/api/polymarket/books',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiPolymarketFeesRoute = ApiPolymarketFeesRouteImport.update({
+  id: '/api/polymarket/fees',
+  path: '/api/polymarket/fees',
   getParentRoute: () => rootRouteImport,
 } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/portfolio': typeof PortfolioRoute
-  '/api/prices': typeof ApiPricesRoute
+  '/api/polymarket/books': typeof ApiPolymarketBooksRoute
+  '/api/polymarket/fees': typeof ApiPolymarketFeesRoute
+  '/api/polymarket/markets': typeof ApiPolymarketMarketsRoute
   '/market/$marketId': typeof MarketMarketIdRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/portfolio': typeof PortfolioRoute
-  '/api/prices': typeof ApiPricesRoute
+  '/api/polymarket/books': typeof ApiPolymarketBooksRoute
+  '/api/polymarket/fees': typeof ApiPolymarketFeesRoute
+  '/api/polymarket/markets': typeof ApiPolymarketMarketsRoute
   '/market/$marketId': typeof MarketMarketIdRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/portfolio': typeof PortfolioRoute
-  '/api/prices': typeof ApiPricesRoute
+  '/api/polymarket/books': typeof ApiPolymarketBooksRoute
+  '/api/polymarket/fees': typeof ApiPolymarketFeesRoute
+  '/api/polymarket/markets': typeof ApiPolymarketMarketsRoute
   '/market/$marketId': typeof MarketMarketIdRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/portfolio' | '/api/prices' | '/market/$marketId'
+  fullPaths: '/' | '/portfolio' | '/api/polymarket/books' | '/api/polymarket/fees' | '/api/polymarket/markets' | '/market/$marketId'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/portfolio' | '/api/prices' | '/market/$marketId'
-  id: '__root__' | '/' | '/portfolio' | '/api/prices' | '/market/$marketId'
+  to: '/' | '/portfolio' | '/api/polymarket/books' | '/api/polymarket/fees' | '/api/polymarket/markets' | '/market/$marketId'
+  id: '__root__' | '/' | '/portfolio' | '/api/polymarket/books' | '/api/polymarket/fees' | '/api/polymarket/markets' | '/market/$marketId'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   PortfolioRoute: typeof PortfolioRoute
-  ApiPricesRoute: typeof ApiPricesRoute
+  ApiPolymarketBooksRoute: typeof ApiPolymarketBooksRoute
+  ApiPolymarketFeesRoute: typeof ApiPolymarketFeesRoute
+  ApiPolymarketMarketsRoute: typeof ApiPolymarketMarketsRoute
   MarketMarketIdRoute: typeof MarketMarketIdRoute
 }
 
@@ -92,11 +112,25 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof MarketMarketIdRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/prices': {
-      id: '/api/prices'
-      path: '/api/prices'
-      fullPath: '/api/prices'
-      preLoaderRoute: typeof ApiPricesRouteImport
+    '/api/polymarket/markets': {
+      id: '/api/polymarket/markets'
+      path: '/api/polymarket/markets'
+      fullPath: '/api/polymarket/markets'
+      preLoaderRoute: typeof ApiPolymarketMarketsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/polymarket/books': {
+      id: '/api/polymarket/books'
+      path: '/api/polymarket/books'
+      fullPath: '/api/polymarket/books'
+      preLoaderRoute: typeof ApiPolymarketBooksRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/polymarket/fees': {
+      id: '/api/polymarket/fees'
+      path: '/api/polymarket/fees'
+      fullPath: '/api/polymarket/fees'
+      preLoaderRoute: typeof ApiPolymarketFeesRouteImport
       parentRoute: typeof rootRouteImport
     }
   }
@@ -105,7 +139,9 @@ declare module '@tanstack/react-router' {
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   PortfolioRoute: PortfolioRoute,
-  ApiPricesRoute: ApiPricesRoute,
+  ApiPolymarketBooksRoute: ApiPolymarketBooksRoute,
+  ApiPolymarketFeesRoute: ApiPolymarketFeesRoute,
+  ApiPolymarketMarketsRoute: ApiPolymarketMarketsRoute,
   MarketMarketIdRoute: MarketMarketIdRoute,
 }
 export const routeTree = rootRouteImport

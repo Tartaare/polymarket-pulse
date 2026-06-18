@@ -47,8 +47,8 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
     meta: [
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
-      { title: "Polysim — Polymarket-style crypto paper trading" },
-      { name: "description", content: "Paper trading des marchés Up/Down crypto 5m & 15m." },
+      { title: "Polysim — Polymarket CLOB paper trading" },
+      { name: "description", content: "Paper trading des vrais marchés Polymarket crypto Up/Down 5m, 15m et 1h." },
       { name: "theme-color", content: "#0b0e11" },
     ],
     links: [{ rel: "stylesheet", href: appCss }],
@@ -61,7 +61,7 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
 
 function RootShell({ children }: { children: ReactNode }) {
   return (
-    <html lang="en">
+    <html lang="fr">
       <head><HeadContent /></head>
       <body>{children}<Scripts /></body>
     </html>
@@ -117,7 +117,7 @@ function Header() {
         </nav>
         <div className="ml-auto text-xs text-muted-foreground hidden sm:flex items-center gap-2">
           <span className="h-2 w-2 rounded-full bg-up animate-pulse" />
-          Live · Binance feed
+          Live · Polymarket CLOB
         </div>
       </div>
     </header>

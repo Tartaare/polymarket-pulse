@@ -1,103 +1,131 @@
-import type { Order, Fill, MarketBook, OutcomeBook, BookLevel } from "./types";
+import type { BookLevel, Fill, Order, OutcomeBook } from "./types";
+import { enrichBook } from "./orderbook";
 
-export const TAKER_FEE_RATE = 0.07;
-
-export function calcFee(size: number, price: number): number {
-  // fee = size * rate * p * (1 - p), rounded to 5 decimals
-  return Math.round(size * TAKER_FEE_RATE * price * (1 - price) * 1e5) / 1e5;
+export function calcFee(size: number, price: number, feeRateBps: number): number {
+  const rate = feeRateBps / 10_000;
+  return Math.round(size * rate * price * (1 - price) * 100_000) / 100_000;
 }
 
-interface MatchResult {
+export interface ExecutionEstimate {
+  avgPrice: number;
+  cost: number;
+  fee: number;
+  fillable: number;
+  slippage: number;
+}
+
+export interface MatchResult {
   fills: Fill[];
-  remaining: number; // shares unfilled
+  remaining: number;
   newBook: OutcomeBook;
-  totalCost: number; // cash spent (BUY) or received (SELL), excluding fees
+  totalCost: number;
   totalFee: number;
+  avgPrice: number;
 }
 
 let fillCounter = 0;
-function nextFillId(): string {
-  fillCounter += 1;
-  return `fill_${Date.now().toString(36)}_${fillCounter}`;
+
+export function estimateExecution(opts: {
+  side: Order["side"];
+  size: number;
+  book: OutcomeBook;
+  limitPrice?: number;
+  feeRateBps: number;
+}): ExecutionEstimate {
+  const levels = opts.side === "BUY" ? opts.book.asks : opts.book.bids;
+  const walked = walkLevels(levels, opts.side, opts.size, opts.limitPrice);
+  const avgPrice = walked.fillable > 0 ? walked.cost / walked.fillable : 0;
+  const reference = opts.side === "BUY" ? opts.book.bestAsk : opts.book.bestBid;
+  const slippage = reference && walked.fillable > 0 ? Math.abs(avgPrice - reference) : 0;
+  return {
+    avgPrice,
+    cost: walked.cost,
+    fee: calcFee(walked.fillable, avgPrice || 0.5, opts.feeRateBps),
+    fillable: walked.fillable,
+    slippage,
+  };
 }
 
-// Walk the opposite side of the book.
-// BUY consumes asks (ascending price). SELL consumes bids (descending price).
 export function matchAgainstBook(opts: {
   order: Order;
   book: OutcomeBook;
-  limitPrice?: number; // overrides order.limitPrice for marketable
+  feeRateBps: number;
   ts: number;
 }): MatchResult {
-  const { order, book, ts } = opts;
+  const { order, book, feeRateBps, ts } = opts;
   const isBuy = order.side === "BUY";
-  const levels = isBuy ? [...book.asks] : [...book.bids];
-  const limit = opts.limitPrice ?? order.limitPrice;
-
-  let remaining = order.size - order.filled;
-  const fills: Fill[] = [];
-  let totalCost = 0;
-  let totalFee = 0;
-  const consumed: BookLevel[] = [];
-
-  for (const level of levels) {
-    if (remaining <= 1e-9) break;
-    if (limit != null) {
-      if (isBuy && level.price > limit + 1e-9) break;
-      if (!isBuy && level.price < limit - 1e-9) break;
-    }
-    const take = Math.min(level.size, remaining);
-    if (take <= 0) continue;
-    const fee = calcFee(take, level.price);
-    fills.push({
+  const levels = isBuy ? book.asks : book.bids;
+  const remainingBefore = order.size - order.filled;
+  const walked = walkLevels(levels, order.side, remainingBefore, order.limitPrice);
+  const fills: Fill[] = walked.taken.map((level) => {
+    const fee = calcFee(level.size, level.price, feeRateBps);
+    return {
       id: nextFillId(),
       orderId: order.id,
       marketId: order.marketId,
+      tokenId: order.tokenId,
       outcome: order.outcome,
       side: order.side,
       price: level.price,
-      size: take,
+      size: level.size,
       fee,
+      feeRateBps,
       ts,
-    });
-    totalCost += take * level.price;
-    totalFee += fee;
-    remaining -= take;
-    consumed.push({ price: level.price, size: take });
-  }
+    };
+  });
 
-  // produce a new book with consumed liquidity removed
-  const newLevels = levels
-    .map((l) => {
-      const c = consumed.find((x) => x.price === l.price);
-      if (!c) return l;
-      return { price: l.price, size: l.size - c.size };
-    })
-    .filter((l) => l.size > 1e-9);
+  const consumed = new Map(walked.taken.map((level) => [level.price, level.size]));
+  const nextLevels = levels
+    .map((level) => ({ ...level, size: level.size - (consumed.get(level.price) ?? 0) }))
+    .filter((level) => level.size > 1e-9);
 
-  const newBook: OutcomeBook = {
-    bids: isBuy ? book.bids : newLevels,
-    asks: isBuy ? newLevels : book.asks,
-    lastTrade: fills.length > 0
-      ? { price: fills[fills.length - 1].price, ts, side: order.side }
+  const newBook = enrichBook({
+    ...book,
+    bids: isBuy ? book.bids : nextLevels,
+    asks: isBuy ? nextLevels : book.asks,
+    lastTrade: fills.length
+      ? { price: fills[fills.length - 1].price, size: fills[fills.length - 1].size, ts, side: order.side }
       : book.lastTrade,
-  };
+    updatedAt: ts,
+  });
 
-  return { fills, remaining, newBook, totalCost, totalFee };
+  const totalFee = fills.reduce((acc, fill) => acc + fill.fee, 0);
+  const totalCost = fills.reduce((acc, fill) => acc + fill.size * fill.price, 0);
+  const filled = fills.reduce((acc, fill) => acc + fill.size, 0);
+  return {
+    fills,
+    remaining: remainingBefore - filled,
+    newBook,
+    totalCost,
+    totalFee,
+    avgPrice: filled > 0 ? totalCost / filled : 0,
+  };
 }
 
-export function totalCostBuy(order: Order, book: OutcomeBook, limitPrice?: number): { cost: number; canFill: number } {
-  const limit = limitPrice ?? order.limitPrice;
-  let need = order.size - order.filled;
+function walkLevels(levels: BookLevel[], side: Order["side"], size: number, limitPrice?: number): {
+  taken: BookLevel[];
+  fillable: number;
+  cost: number;
+} {
+  let remaining = size;
   let cost = 0;
-  let canFill = 0;
-  for (const l of book.asks) {
-    if (need <= 0) break;
-    if (limit != null && l.price > limit + 1e-9) break;
-    const take = Math.min(l.size, need);
-    cost += take * l.price;
-    canFill += take;
-    need -= take;
+  const taken: BookLevel[] = [];
+  for (const level of levels) {
+    if (remaining <= 1e-9) break;
+    if (limitPrice != null) {
+      if (side === "BUY" && level.price > limitPrice + 1e-9) break;
+      if (side === "SELL" && level.price < limitPrice - 1e-9) break;
+    }
+    const take = Math.min(level.size, remaining);
+    if (take <= 0) continue;
+    taken.push({ price: level.price, size: take });
+    cost += take * level.price;
+    remaining -= take;
   }
-  return { cost, canFill };
+  return { taken, fillable: size - remaining, cost };
+}
+
+function nextFillId(): string {
+  fillCounter += 1;
+  return `fill_${Date.now().toString(36)}_${fillCounter}`;
 }

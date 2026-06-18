@@ -1,32 +1,28 @@
 import { useSyncExternalStore } from "react";
+import { applyPriceChange, bookFromClob, createEmptyMarketBook, displayPrice, type ClobBookPayload } from "../sim/orderbook";
+import { estimateExecution, matchAgainstBook } from "../sim/matching";
+import { applyFillsToPortfolio, totalReserved } from "../sim/portfolio";
+import { readPersistedAppState, saveBookSnapshots, writePersistedAppState } from "./indexed-db";
+import { updateMarketStatus } from "../polymarket/normalize";
 import type {
-  Asset,
+  EquityPoint,
+  Fill,
   Market,
   MarketBook,
   Order,
+  OrderStatus,
+  OrderType,
   Outcome,
+  OutcomeBook,
   Portfolio,
   Side,
-  OrderType,
-  PricePoint,
+  TimeInForce,
 } from "../sim/types";
-import {
-  buildMarket,
-  currentWindowOpen,
-  marketId,
-  resolveOutcome,
-  shouldResolve,
-} from "../sim/resolution";
-import { buildMarketBook, displayPrice, midpoint } from "../sim/orderbook";
-import { fairUpProbability } from "../sim/pricing";
-import { matchAgainstBook, calcFee, totalCostBuy } from "../sim/matching";
-import { applyFillsToPortfolio, totalReserved } from "../sim/portfolio";
-import { priceFeed } from "../feed/binance-ws";
 
-const ASSETS: Asset[] = ["BTC", "ETH", "SOL"];
-const WINDOWS = [5, 15] as const;
 const STARTING_CASH = 10_000;
-const PRICE_HISTORY_MAX = 240;
+const DISCOVERY_INTERVAL_MS = 30_000;
+const BOOK_SNAPSHOT_INTERVAL_MS = 10_000;
+const EQUITY_INTERVAL_MS = 5_000;
 
 interface PlaceResult {
   ok: boolean;
@@ -36,85 +32,86 @@ interface PlaceResult {
 
 interface SimState {
   initialized: boolean;
+  loadingMarkets: boolean;
+  marketError: string | null;
+  clobStatus: "idle" | "connecting" | "live" | "degraded";
   markets: Record<string, Market>;
   books: Record<string, MarketBook>;
-  history: Record<string, PricePoint[]>; // crypto price history per market
   portfolio: Portfolio;
-  cryptoPrices: Record<Asset, number>;
   lastTick: number;
+  lastDiscoveryAt: number;
+  lastBookSnapshotAt: number;
+  lastEquityAt: number;
 
-  // actions
   init: () => void;
+  refreshMarkets: () => Promise<void>;
+  hydrateBooks: (marketIds?: string[]) => Promise<void>;
+  applyClobBook: (payload: ClobBookPayload) => void;
+  applyClobPriceChanges: (changes: Array<{ asset_id: string; price: string; size: string; side: Side; hash?: string }>, ts: number) => void;
+  applyLastTrade: (input: { tokenId: string; price: number; size: number; side: Side; ts: number; feeRateBps?: number }) => void;
+  markMarketResolved: (conditionId: string, winningTokenId?: string, winningOutcome?: string) => void;
+  setClobStatus: (status: SimState["clobStatus"]) => void;
   tick: () => void;
   placeOrder: (input: {
     marketId: string;
     outcome: Outcome;
     side: Side;
     type: OrderType;
+    timeInForce?: TimeInForce;
     limitCents?: number;
     sizeShares: number;
     postOnly?: boolean;
+    expiresAt?: number;
   }) => PlaceResult;
   cancelOrder: (orderId: string) => void;
   cancelAll: () => void;
   redeem: (marketId: string, outcome: Outcome) => void;
   resetPortfolio: () => void;
+  exportFillsCsv: () => string;
 }
 
-type PersistedSimState = Pick<SimState, "portfolio" | "markets" | "history">;
 type SimStoreApi = {
   getState: () => SimState;
   setState: (partial: Partial<SimState> | ((state: SimState) => Partial<SimState>)) => void;
   subscribe: (listener: () => void) => () => void;
 };
+
 type SimStoreHook = {
   <T>(selector: (state: SimState) => T): T;
   getState: () => SimState;
 };
 
-const PERSIST_KEY = "polysim-v1";
+let orderCounter = 0;
 
 function emptyPortfolio(): Portfolio {
-  return { cash: STARTING_CASH, reserved: 0, positions: [], orders: [], fills: [] };
-}
-
-function readPersistedState(): Partial<PersistedSimState> {
-  if (typeof localStorage === "undefined") return {};
-  try {
-    const raw = localStorage.getItem(PERSIST_KEY);
-    if (!raw) return {};
-    const parsed = JSON.parse(raw) as unknown;
-    if (!parsed || typeof parsed !== "object") return {};
-    return parsed as Partial<PersistedSimState>;
-  } catch {
-    return {};
-  }
-}
-
-function writePersistedState(state: SimState): void {
-  if (typeof localStorage === "undefined") return;
-  const persisted: PersistedSimState = {
-    portfolio: state.portfolio,
-    markets: state.markets,
-    history: state.history,
+  return {
+    cash: STARTING_CASH,
+    reserved: 0,
+    positions: [],
+    orders: [],
+    fills: [],
+    equity: [],
+    sessions: [{ id: `sess_${Date.now().toString(36)}`, startedAt: Date.now(), label: "Session locale" }],
   };
-  localStorage.setItem(PERSIST_KEY, JSON.stringify(persisted));
 }
 
-function createSimStore(
-  initializer: (set: SimStoreApi["setState"], get: SimStoreApi["getState"]) => SimState,
-): SimStoreHook {
+function createSimStore(initializer: (set: SimStoreApi["setState"], get: SimStoreApi["getState"]) => SimState): SimStoreHook {
   const listeners = new Set<() => void>();
   let state: SimState;
   let hydrated = false;
+  let persistTimer: number | undefined;
 
-  const hydrate = (): void => {
-    if (hydrated) return;
-    hydrated = true;
-    const persisted = readPersistedState();
-    if (Object.keys(persisted).length === 0) return;
-    state = { ...state, ...persisted };
-    listeners.forEach((listener) => listener());
+  const persist = (): void => {
+    if (typeof window === "undefined") return;
+    if (persistTimer) window.clearTimeout(persistTimer);
+    persistTimer = window.setTimeout(() => {
+      void writePersistedAppState({
+        markets: state.markets,
+        books: state.books,
+        portfolio: state.portfolio,
+        lastTick: state.lastTick,
+      });
+    }, 100);
   };
 
   const api: SimStoreApi = {
@@ -122,12 +119,24 @@ function createSimStore(
     setState: (partial) => {
       const nextPartial = typeof partial === "function" ? partial(state) : partial;
       state = { ...state, ...nextPartial };
-      writePersistedState(state);
+      if (state.initialized) persist();
       listeners.forEach((listener) => listener());
     },
     subscribe: (listener) => {
       listeners.add(listener);
-      hydrate();
+      if (!hydrated) {
+        hydrated = true;
+        void readPersistedAppState().then((persisted) => {
+          if (!persisted || Object.keys(persisted).length === 0) return;
+          state = {
+            ...state,
+            ...persisted,
+            portfolio: { ...emptyPortfolio(), ...persisted.portfolio },
+            initialized: true,
+          };
+          listeners.forEach((item) => item());
+        });
+      }
       return () => listeners.delete(listener);
     },
   };
@@ -140,347 +149,452 @@ function createSimStore(
       () => selector(api.getState()),
       () => selector(api.getState()),
     );
-
   useStore.getState = api.getState;
   return useStore;
 }
 
-let orderCounter = 0;
-function nextOrderId(): string {
-  orderCounter += 1;
-  return `ord_${Date.now().toString(36)}_${orderCounter}`;
-}
-
 export const useSimStore = createSimStore((set, get) => ({
   initialized: false,
+  loadingMarkets: false,
+  marketError: null,
+  clobStatus: "idle",
   markets: {},
   books: {},
-  history: {},
   portfolio: emptyPortfolio(),
-  cryptoPrices: { BTC: 0, ETH: 0, SOL: 0 },
   lastTick: 0,
+  lastDiscoveryAt: 0,
+  lastBookSnapshotAt: 0,
+  lastEquityAt: 0,
 
   init: () => {
     if (get().initialized) return;
     set({ initialized: true });
+    void get().refreshMarkets();
   },
+
+  refreshMarkets: async () => {
+    const state = get();
+    if (state.loadingMarkets) return;
+    set({ loadingMarkets: true, marketError: null });
+    try {
+      const response = await fetch("/api/polymarket/markets");
+      if (!response.ok) throw new Error(`markets ${response.status}`);
+      const data = (await response.json()) as { markets: Market[] };
+      const nextMarkets = { ...state.markets };
+      const nextBooks = { ...state.books };
+      for (const market of data.markets) {
+        nextMarkets[market.id] = { ...nextMarkets[market.id], ...market };
+        if (!nextBooks[market.id]) {
+          nextBooks[market.id] = createEmptyMarketBook(
+            market.id,
+            market.conditionId,
+            market.clobTokenIds.UP,
+            market.clobTokenIds.DOWN,
+          );
+        }
+      }
+      set({ markets: nextMarkets, books: nextBooks, loadingMarkets: false, lastDiscoveryAt: Date.now() });
+      void get().hydrateBooks(data.markets.map((market) => market.id));
+    } catch (error) {
+      set({ loadingMarkets: false, marketError: (error as Error).message });
+    }
+  },
+
+  hydrateBooks: async (marketIds) => {
+    const state = get();
+    const targetMarkets = (marketIds ?? Object.keys(state.markets))
+      .map((id) => state.markets[id])
+      .filter((market): market is Market => Boolean(market) && market.state !== "RESOLVED");
+    const tokenIds = targetMarkets.flatMap((market) => [market.clobTokenIds.UP, market.clobTokenIds.DOWN]);
+    if (tokenIds.length === 0) return;
+    const response = await fetch(`/api/polymarket/books?tokenIds=${encodeURIComponent(tokenIds.join(","))}`);
+    if (!response.ok) return;
+    const data = (await response.json()) as { books: ClobBookPayload[] };
+    for (const payload of data.books) get().applyClobBook(payload);
+
+    const feeResponse = await fetch(`/api/polymarket/fees?tokenIds=${encodeURIComponent(tokenIds.join(","))}`);
+    if (!feeResponse.ok) return;
+    const feeData = (await feeResponse.json()) as { fees: Record<string, number | null> };
+    const markets = { ...get().markets };
+    for (const market of Object.values(markets)) {
+      const fees = [feeData.fees[market.clobTokenIds.UP], feeData.fees[market.clobTokenIds.DOWN]].filter(
+        (fee): fee is number => typeof fee === "number",
+      );
+      if (fees.length > 0) markets[market.id] = { ...market, feeRateBps: Math.max(...fees) };
+    }
+    set({ markets });
+  },
+
+  applyClobBook: (payload) => {
+    const state = get();
+    const market = findMarketByToken(state.markets, payload.asset_id);
+    if (!market) return;
+    const outcome = outcomeByToken(market, payload.asset_id);
+    if (!outcome) return;
+    const prev = state.books[market.id] ?? createEmptyMarketBook(market.id, market.conditionId, market.clobTokenIds.UP, market.clobTokenIds.DOWN);
+    const books = {
+      ...state.books,
+      [market.id]: {
+        ...prev,
+        [outcome]: bookFromClob(payload),
+        updatedAt: Number(payload.timestamp ?? Date.now()),
+      } as MarketBook,
+    };
+    set({ books });
+  },
+
+  applyClobPriceChanges: (changes, ts) => {
+    let books = { ...get().books };
+    for (const change of changes) {
+      const market = findMarketByToken(get().markets, change.asset_id);
+      if (!market) continue;
+      const outcome = outcomeByToken(market, change.asset_id);
+      if (!outcome) continue;
+      const book = books[market.id];
+      if (!book) continue;
+      books = {
+        ...books,
+        [market.id]: {
+          ...book,
+          [outcome]: applyPriceChange(book[outcome], change, ts),
+          updatedAt: ts,
+        } as MarketBook,
+      };
+    }
+    set({ books });
+  },
+
+  applyLastTrade: (input) => {
+    const state = get();
+    const market = findMarketByToken(state.markets, input.tokenId);
+    if (!market) return;
+    const outcome = outcomeByToken(market, input.tokenId);
+    if (!outcome) return;
+    const book = state.books[market.id];
+    if (!book) return;
+    set({
+      books: {
+        ...state.books,
+        [market.id]: {
+          ...book,
+          [outcome]: { ...book[outcome], lastTrade: input, updatedAt: input.ts },
+          updatedAt: input.ts,
+        } as MarketBook,
+      },
+    });
+  },
+
+  markMarketResolved: (conditionId, winningTokenId, winningOutcome) => {
+    const state = get();
+    const markets = { ...state.markets };
+    const portfolio = { ...state.portfolio };
+    const market = Object.values(markets).find((item) => item.conditionId === conditionId || item.id === conditionId);
+    if (!market) return;
+    const resolvedOutcome =
+      winningTokenId && winningTokenId === market.clobTokenIds.UP ? "UP" :
+      winningTokenId && winningTokenId === market.clobTokenIds.DOWN ? "DOWN" :
+      winningOutcome?.toLowerCase().includes("up") || winningOutcome?.toLowerCase().includes("yes") ? "UP" : "DOWN";
+    markets[market.id] = { ...market, state: "RESOLVED", status: "resolved", closed: true, resolvedOutcome };
+    portfolio.positions = portfolio.positions.map((position) =>
+      position.marketId === market.id ? { ...position, redeemable: true } : position,
+    );
+    portfolio.orders = portfolio.orders.map((order) =>
+      order.marketId === market.id && isOpenStatus(order.status)
+        ? { ...order, status: "CANCELLED" as const, updatedAt: Date.now() }
+        : order,
+    );
+    portfolio.reserved = totalReserved(portfolio.orders);
+    set({ markets, portfolio });
+  },
+
+  setClobStatus: (clobStatus) => set({ clobStatus }),
 
   tick: () => {
     const now = Date.now();
-    const prices = priceFeed.getPrices();
     const state = get();
-    const markets = { ...state.markets };
-    const books = { ...state.books };
-    const history = { ...state.history };
-    let portfolio = state.portfolio;
+    let markets = { ...state.markets };
+    let portfolio = { ...state.portfolio };
+    let changed = false;
 
-    // 1) Ensure current windows exist for each asset/window combo
-    for (const asset of ASSETS) {
-      const price = prices[asset];
-      if (price <= 0) continue;
-      for (const win of WINDOWS) {
-        const openAt = currentWindowOpen(now, win);
-        const id = marketId(asset, win, openAt);
-        if (!markets[id]) {
-          markets[id] = buildMarket({ asset, windowMin: win, openAt, priceAtOpen: price });
-        }
+    if (now - state.lastDiscoveryAt > DISCOVERY_INTERVAL_MS) void get().refreshMarkets();
+
+    for (const market of Object.values(markets)) {
+      const next = updateMarketStatus(market, now);
+      if (next.state !== market.state) {
+        markets[market.id] = next;
+        changed = true;
       }
     }
 
-    // 2) Update current prices on open markets + record history
-    for (const m of Object.values(markets)) {
-      if (m.state !== "OPEN") continue;
-      const p = prices[m.asset];
-      if (p > 0) {
-        markets[m.id] = { ...m, currentPrice: p };
-        const h = history[m.id] ?? [];
-        if (h.length === 0 || now - h[h.length - 1].ts > 1000) {
-          const next = [...h, { ts: now, price: p }];
-          if (next.length > PRICE_HISTORY_MAX) next.splice(0, next.length - PRICE_HISTORY_MAX);
-          history[m.id] = next;
-        }
+    portfolio.orders = portfolio.orders.map((order) => {
+      if (!isOpenStatus(order.status)) return order;
+      if (order.timeInForce === "GTD" && order.expiresAt && now >= order.expiresAt) {
+        changed = true;
+        return { ...order, status: "EXPIRED" as const, updatedAt: now };
       }
+      return order;
+    });
+
+    const match = matchRestingOrders({ markets, books: state.books, portfolio, now });
+    if (match.changed) {
+      portfolio = match.portfolio;
+      changed = true;
     }
 
-    // 3) Rebuild books for open markets using fair probability
-    for (const m of Object.values(markets)) {
-      if (m.state !== "OPEN") continue;
-      const msToClose = m.closeAt - now;
-      const upProb = fairUpProbability({
-        asset: m.asset,
-        currentPrice: m.currentPrice,
-        priceToBeat: m.priceToBeat,
-        msToClose,
-      });
-      // keep lastTrade if existed
-      const seed = Math.floor(now / 4000) + (m.id.length % 17);
-      const newBook = buildMarketBook(m.id, upProb, now, seed);
-      const prev = books[m.id];
-      if (prev) {
-        newBook.UP.lastTrade = prev.UP.lastTrade;
-        newBook.DOWN.lastTrade = prev.DOWN.lastTrade;
-      }
-      books[m.id] = newBook;
+    portfolio.reserved = totalReserved(portfolio.orders);
+    if (now - state.lastEquityAt > EQUITY_INTERVAL_MS) {
+      portfolio.equity = [...portfolio.equity.slice(-300), equityPoint(portfolio, markets, match.books, now)];
+      changed = true;
     }
 
-    // 4) Try to match any resting LIMIT orders that may now be crossable
-    const newFills = [];
-    const orders = portfolio.orders.map((o) => ({ ...o }));
-    for (const order of orders) {
-      if (order.status !== "OPEN" && order.status !== "PARTIAL") continue;
-      if (order.type !== "LIMIT") continue;
-      const book = books[order.marketId];
-      if (!book) continue;
-      const ob = book[order.outcome];
-      const res = matchAgainstBook({ order, book: ob, ts: now });
-      if (res.fills.length === 0) continue;
-      // apply book change
-      books[order.marketId] = {
-        ...book,
-        [order.outcome]: res.newBook,
-        updatedAt: now,
-      } as MarketBook;
-      for (const f of res.fills) {
-        order.filled += f.size;
-        order.feesPaid += f.fee;
-        newFills.push(f);
-      }
-      const filledSum = res.fills.reduce((a, f) => a + f.size, 0);
-      const costSum = res.fills.reduce((a, f) => a + f.size * f.price, 0);
-      order.avgFillPrice =
-        order.filled > 0
-          ? (order.avgFillPrice * (order.filled - filledSum) + costSum) / order.filled
-          : 0;
-      if (order.filled >= order.size - 1e-9) order.status = "FILLED";
-      else order.status = "PARTIAL";
-      markets[order.marketId] = {
-        ...markets[order.marketId],
-        volume: (markets[order.marketId]?.volume ?? 0) + costSum,
-      };
+    if (now - state.lastBookSnapshotAt > BOOK_SNAPSHOT_INTERVAL_MS) {
+      void saveBookSnapshots(state.books);
     }
-    if (newFills.length > 0) {
-      portfolio = applyFillsToPortfolio({ ...portfolio, orders }, newFills);
-    } else {
-      portfolio = { ...portfolio, orders };
-    }
-
-    // 5) Resolve markets past closeAt
-    for (const m of Object.values(markets)) {
-      if (!shouldResolve(m, now)) continue;
-      const winner = resolveOutcome(m);
-      markets[m.id] = { ...m, state: "RESOLVED", resolvedOutcome: winner };
-      // mark positions redeemable + cancel related orders
-      const positions = portfolio.positions.map((p) => {
-        if (p.marketId !== m.id) return p;
-        return { ...p, redeemable: true };
-      });
-      const cancelledOrders = portfolio.orders.map((o) => {
-        if (o.marketId !== m.id) return o;
-        if (o.status === "OPEN" || o.status === "PARTIAL") {
-          return { ...o, status: "CANCELED" as const };
-        }
-        return o;
-      });
-      portfolio = { ...portfolio, positions, orders: cancelledOrders };
-    }
-
-    // 6) Update reserved cash from open buy limit orders
-    portfolio = { ...portfolio, reserved: totalReserved(portfolio.orders) };
 
     set({
-      markets,
-      books,
-      history,
+      markets: changed ? markets : state.markets,
+      books: match.books,
       portfolio,
-      cryptoPrices: prices,
       lastTick: now,
+      lastBookSnapshotAt: now - state.lastBookSnapshotAt > BOOK_SNAPSHOT_INTERVAL_MS ? now : state.lastBookSnapshotAt,
+      lastEquityAt: now - state.lastEquityAt > EQUITY_INTERVAL_MS ? now : state.lastEquityAt,
     });
   },
 
   placeOrder: (input) => {
     const state = get();
     const market = state.markets[input.marketId];
-    if (!market || market.state !== "OPEN") return { ok: false, message: "Market not open" };
+    if (!market || (market.state !== "LIVE" && market.state !== "CLOSING")) return { ok: false, message: "Market not live" };
     const book = state.books[input.marketId];
-    if (!book) return { ok: false, message: "No order book" };
-    const ob = book[input.outcome];
-    if (input.sizeShares < 1) return { ok: false, message: "Min size: 1 share" };
+    if (!book) return { ok: false, message: "No CLOB book" };
+    if (input.sizeShares < market.orderMinSize) return { ok: false, message: `Min size: ${market.orderMinSize}` };
 
+    const tokenId = market.clobTokenIds[input.outcome];
+    const outcomeBook = book[input.outcome];
     const now = Date.now();
-    const limitPrice = input.limitCents != null ? input.limitCents / 100 : undefined;
-
-    let portfolio = state.portfolio;
-    const books = { ...state.books };
-
-    // Build order
+    const limitPrice = input.type === "MARKET" ? undefined : clampPrice((input.limitCents ?? 50) / 100);
     const order: Order = {
       id: nextOrderId(),
-      marketId: input.marketId,
+      marketId: market.id,
+      tokenId,
       outcome: input.outcome,
       side: input.side,
       type: input.type,
+      timeInForce: input.timeInForce ?? "GTC",
       limitPrice,
+      expiresAt: input.expiresAt,
       size: input.sizeShares,
       filled: 0,
       avgFillPrice: 0,
-      postOnly: !!input.postOnly,
+      postOnly: Boolean(input.postOnly),
       status: "OPEN",
       createdAt: now,
-      feesPaid: 0,
-    };
-
-    // For BUY: validate cash. Use marketable estimated cost.
-    if (order.side === "BUY") {
-      let estCost: number;
-      if (order.type === "MARKET") {
-        const { cost, canFill } = totalCostBuy(order, ob);
-        if (canFill < order.size - 1e-9) return { ok: false, message: "Insufficient liquidity" };
-        estCost = cost;
-      } else if (order.type === "FOK") {
-        const { cost, canFill } = totalCostBuy(order, ob, limitPrice);
-        if (canFill < order.size - 1e-9) return { ok: false, message: "FOK cannot fill fully" };
-        estCost = cost;
-      } else {
-        // LIMIT — worst case = size * limit
-        estCost = order.size * (limitPrice ?? 0);
-      }
-      const available = portfolio.cash - portfolio.reserved;
-      const estFee = order.type === "LIMIT" ? 0 : calcFee(order.size, limitPrice ?? 0.5);
-      if (estCost + estFee > available + 1e-6) return { ok: false, message: "Insufficient cash" };
-    } else {
-      // SELL — need owned shares
-      const pos = portfolio.positions.find(
-        (p) => p.marketId === order.marketId && p.outcome === order.outcome,
-      );
-      if (!pos || pos.size < order.size - 1e-9)
-        return { ok: false, message: "Insufficient shares" };
-    }
-
-    // Post-only LIMIT: refuse if crossable
-    if (order.postOnly && order.type === "LIMIT") {
-      const bestAsk = ob.asks[0]?.price;
-      const bestBid = ob.bids[0]?.price;
-      if (order.side === "BUY" && bestAsk != null && limitPrice! >= bestAsk) {
-        return { ok: false, message: "Post-only would cross" };
-      }
-      if (order.side === "SELL" && bestBid != null && limitPrice! <= bestBid) {
-        return { ok: false, message: "Post-only would cross" };
-      }
-    }
-
-    // Execute MARKET / FOK / marketable LIMIT immediately
-    let resultBook = ob;
-    const fills = [];
-    let filledThisCall = 0;
-    let costThisCall = 0;
-    if (
-      order.type === "MARKET" ||
-      order.type === "FOK" ||
-      (order.type === "LIMIT" && !order.postOnly)
-    ) {
-      const res = matchAgainstBook({
-        order,
-        book: ob,
-        limitPrice: order.type === "MARKET" ? undefined : limitPrice,
-        ts: now,
-      });
-      if (order.type === "FOK" && res.remaining > 1e-9) {
-        return { ok: false, message: "FOK cannot fill fully" };
-      }
-      for (const f of res.fills) {
-        order.filled += f.size;
-        order.feesPaid += f.fee;
-        fills.push(f);
-        filledThisCall += f.size;
-        costThisCall += f.size * f.price;
-      }
-      if (filledThisCall > 0) {
-        order.avgFillPrice = costThisCall / filledThisCall;
-      }
-      resultBook = res.newBook;
-    }
-
-    // Determine final status
-    if (order.filled >= order.size - 1e-9) order.status = "FILLED";
-    else if (order.type === "LIMIT") order.status = order.filled > 0 ? "PARTIAL" : "OPEN";
-    else if (order.type === "MARKET") order.status = order.filled > 0 ? "FILLED" : "CANCELED";
-
-    // Apply book change
-    books[order.marketId] = {
-      ...book,
-      [order.outcome]: resultBook,
       updatedAt: now,
-    } as MarketBook;
-
-    // Apply fills to portfolio
-    const newOrders = [...portfolio.orders, order];
-    portfolio = applyFillsToPortfolio({ ...portfolio, orders: newOrders }, fills);
-
-    // Update market volume
-    const markets = { ...state.markets };
-    markets[order.marketId] = {
-      ...market,
-      volume: market.volume + costThisCall,
+      feesPaid: 0,
+      grossProceeds: 0,
     };
 
-    // reserved
-    portfolio = { ...portfolio, reserved: totalReserved(portfolio.orders) };
+    const validation = validateOrder(order, outcomeBook, state.portfolio, market.feeRateBps);
+    if (!validation.ok) return validation;
 
-    set({ books, portfolio, markets });
-    return { ok: true, orderId: order.id };
+    let portfolio = { ...state.portfolio, orders: [...state.portfolio.orders, order] };
+    let books = { ...state.books };
+    if (shouldExecuteImmediately(order, outcomeBook)) {
+      const res = matchAgainstBook({ order, book: outcomeBook, feeRateBps: market.feeRateBps, ts: now });
+      if (order.type === "FOK" && res.remaining > 1e-9) return { ok: false, message: "FOK cannot fill fully" };
+      order.filled = order.size - res.remaining;
+      order.avgFillPrice = res.avgPrice;
+      order.feesPaid = res.totalFee;
+      order.grossProceeds = res.totalCost;
+      order.status = statusAfterFill(order, res.remaining);
+      order.updatedAt = now;
+      books[market.id] = { ...book, [input.outcome]: res.newBook, updatedAt: now } as MarketBook;
+      portfolio = applyFillsToPortfolio(portfolio, res.fills);
+    } else if (order.type === "FOK" || order.type === "FAK") {
+      order.status = "REJECTED";
+      order.rejectionReason = "No immediate liquidity at limit";
+    }
+    portfolio.orders = portfolio.orders.map((existing) => (existing.id === order.id ? order : existing));
+    portfolio.reserved = totalReserved(portfolio.orders);
+    set({ books, portfolio });
+    return { ok: order.status !== "REJECTED", orderId: order.id, message: order.rejectionReason };
   },
 
   cancelOrder: (orderId) => {
     const state = get();
-    const orders = state.portfolio.orders.map((o) =>
-      o.id === orderId && (o.status === "OPEN" || o.status === "PARTIAL")
-        ? { ...o, status: "CANCELED" as const }
-        : o,
+    const orders = state.portfolio.orders.map((order) =>
+      order.id === orderId && isOpenStatus(order.status) ? { ...order, status: "CANCELLED" as const, updatedAt: Date.now() } : order,
     );
-    const portfolio = { ...state.portfolio, orders, reserved: totalReserved(orders) };
-    set({ portfolio });
+    set({ portfolio: { ...state.portfolio, orders, reserved: totalReserved(orders) } });
   },
 
   cancelAll: () => {
     const state = get();
-    const orders = state.portfolio.orders.map((o) =>
-      o.status === "OPEN" || o.status === "PARTIAL" ? { ...o, status: "CANCELED" as const } : o,
+    const orders = state.portfolio.orders.map((order) =>
+      isOpenStatus(order.status) ? { ...order, status: "CANCELLED" as const, updatedAt: Date.now() } : order,
     );
-    const portfolio = { ...state.portfolio, orders, reserved: totalReserved(orders) };
-    set({ portfolio });
+    set({ portfolio: { ...state.portfolio, orders, reserved: totalReserved(orders) } });
   },
 
-  redeem: (mId, outcome) => {
+  redeem: (marketId, outcome) => {
     const state = get();
-    const market = state.markets[mId];
-    if (!market || market.state !== "RESOLVED" || !market.resolvedOutcome) return;
-    const positions = state.portfolio.positions.map((p) => ({ ...p }));
+    const market = state.markets[marketId];
+    if (!market || market.state !== "RESOLVED") return;
+    const positions = state.portfolio.positions.map((position) => ({ ...position }));
     let cash = state.portfolio.cash;
-    for (const p of positions) {
-      if (p.marketId !== mId || p.outcome !== outcome) continue;
-      if (!p.redeemable || p.redeemed) continue;
-      const payout = market.resolvedOutcome === p.outcome ? p.size * 1 : 0;
+    for (const position of positions) {
+      if (position.marketId !== marketId || position.outcome !== outcome || !position.redeemable || position.redeemed) continue;
+      const payout = market.resolvedOutcome === outcome ? position.size : 0;
       cash += payout;
-      p.realizedPnl += payout - p.size * p.avgPrice;
-      p.redeemed = true;
-      p.redeemable = false;
-      p.size = 0;
+      position.realizedPnl += payout - position.size * position.avgPrice;
+      position.size = 0;
+      position.redeemed = true;
+      position.redeemable = false;
     }
     set({ portfolio: { ...state.portfolio, cash, positions } });
   },
 
-  resetPortfolio: () => {
-    set({ portfolio: emptyPortfolio() });
+  resetPortfolio: () => set({ portfolio: emptyPortfolio() }),
+
+  exportFillsCsv: () => {
+    const rows = [["time", "marketId", "tokenId", "outcome", "side", "price", "size", "fee", "feeRateBps"]];
+    for (const fill of get().portfolio.fills) {
+      rows.push([
+        new Date(fill.ts).toISOString(),
+        fill.marketId,
+        fill.tokenId,
+        fill.outcome,
+        fill.side,
+        String(fill.price),
+        String(fill.size),
+        String(fill.fee),
+        String(fill.feeRateBps),
+      ]);
+    }
+    return rows.map((row) => row.map(csvCell).join(",")).join("\n");
   },
 }));
 
-// Selectors / helpers
 export function selectDisplayPrice(book: MarketBook | undefined, outcome: Outcome): number | null {
-  if (!book) return null;
-  return displayPrice(book[outcome]);
+  return book ? displayPrice(book[outcome]) : null;
 }
 
 export function selectMidpoint(book: MarketBook | undefined, outcome: Outcome): number | null {
-  if (!book) return null;
-  return midpoint(book[outcome]);
+  return book?.[outcome].mid ?? null;
+}
+
+function findMarketByToken(markets: Record<string, Market>, tokenId: string): Market | undefined {
+  return Object.values(markets).find((market) => market.clobTokenIds.UP === tokenId || market.clobTokenIds.DOWN === tokenId);
+}
+
+function outcomeByToken(market: Market, tokenId: string): Outcome | null {
+  if (market.clobTokenIds.UP === tokenId) return "UP";
+  if (market.clobTokenIds.DOWN === tokenId) return "DOWN";
+  return null;
+}
+
+function validateOrder(order: Order, book: OutcomeBook, portfolio: Portfolio, feeRateBps: number): PlaceResult {
+  if (order.postOnly && order.type === "LIMIT") {
+    if (order.side === "BUY" && book.bestAsk != null && order.limitPrice != null && order.limitPrice >= book.bestAsk) {
+      return { ok: false, message: "Post-only would cross best ask" };
+    }
+    if (order.side === "SELL" && book.bestBid != null && order.limitPrice != null && order.limitPrice <= book.bestBid) {
+      return { ok: false, message: "Post-only would cross best bid" };
+    }
+  }
+  if (order.side === "SELL") {
+    const position = portfolio.positions.find((item) => item.tokenId === order.tokenId);
+    if (!position || position.size < order.size - 1e-9) return { ok: false, message: "Insufficient shares" };
+  }
+  if (order.side === "BUY") {
+    const estimate = estimateExecution({
+      side: order.side,
+      size: order.size,
+      book,
+      limitPrice: order.limitPrice,
+      feeRateBps,
+    });
+    const worstCase = order.type === "LIMIT" && !shouldExecuteImmediately(order, book)
+      ? order.size * (order.limitPrice ?? 0)
+      : estimate.cost + estimate.fee;
+    if (worstCase > portfolio.cash - portfolio.reserved + 1e-9) return { ok: false, message: "Insufficient cash" };
+    if (order.type === "FOK" && estimate.fillable < order.size - 1e-9) return { ok: false, message: "FOK cannot fill fully" };
+  }
+  return { ok: true };
+}
+
+function shouldExecuteImmediately(order: Order, book: OutcomeBook): boolean {
+  if (order.type === "MARKET" || order.type === "FOK" || order.type === "FAK") return true;
+  if (order.postOnly) return false;
+  if (order.limitPrice == null) return false;
+  if (order.side === "BUY") return book.bestAsk != null && order.limitPrice >= book.bestAsk;
+  return book.bestBid != null && order.limitPrice <= book.bestBid;
+}
+
+function statusAfterFill(order: Order, remaining: number): OrderStatus {
+  if (remaining <= 1e-9) return "FILLED";
+  if (order.type === "MARKET" || order.type === "FAK") return order.filled > 0 ? "PARTIALLY_FILLED" : "REJECTED";
+  return order.filled > 0 ? "PARTIALLY_FILLED" : "OPEN";
+}
+
+function matchRestingOrders(opts: {
+  markets: Record<string, Market>;
+  books: Record<string, MarketBook>;
+  portfolio: Portfolio;
+  now: number;
+}): { books: Record<string, MarketBook>; portfolio: Portfolio; changed: boolean } {
+  let books = { ...opts.books };
+  let portfolio = { ...opts.portfolio, orders: opts.portfolio.orders.map((order) => ({ ...order })) };
+  const fills: Fill[] = [];
+  let changed = false;
+  for (const order of portfolio.orders) {
+    if (!isOpenStatus(order.status) || order.type !== "LIMIT") continue;
+    const market = opts.markets[order.marketId];
+    const book = books[order.marketId];
+    if (!market || !book || !shouldExecuteImmediately(order, book[order.outcome])) continue;
+    const res = matchAgainstBook({ order, book: book[order.outcome], feeRateBps: market.feeRateBps, ts: opts.now });
+    if (res.fills.length === 0) continue;
+    order.filled = order.size - res.remaining;
+    order.avgFillPrice = order.filled > 0 ? res.totalCost / order.filled : order.avgFillPrice;
+    order.feesPaid += res.totalFee;
+    order.grossProceeds += res.totalCost;
+    order.status = statusAfterFill(order, res.remaining);
+    order.updatedAt = opts.now;
+    books[order.marketId] = { ...book, [order.outcome]: res.newBook, updatedAt: opts.now } as MarketBook;
+    fills.push(...res.fills);
+    changed = true;
+  }
+  if (fills.length > 0) portfolio = applyFillsToPortfolio(portfolio, fills);
+  return { books, portfolio, changed };
+}
+
+function equityPoint(portfolio: Portfolio, markets: Record<string, Market>, books: Record<string, MarketBook>, ts: number): EquityPoint {
+  let markValue = 0;
+  for (const position of portfolio.positions) {
+    if (position.size <= 0) continue;
+    const market = markets[position.marketId];
+    const price = books[position.marketId]?.[position.outcome].mid ?? market?.outcomePrices[position.outcome] ?? position.avgPrice;
+    markValue += position.size * price;
+  }
+  const equity = portfolio.cash + markValue;
+  const netPnl = equity - STARTING_CASH;
+  const fees = portfolio.fills.reduce((acc, fill) => acc + fill.fee, 0);
+  return { ts, equity, cash: portfolio.cash, grossPnl: netPnl + fees, netPnl };
+}
+
+function isOpenStatus(status: OrderStatus): boolean {
+  return status === "OPEN" || status === "PARTIALLY_FILLED";
+}
+
+function nextOrderId(): string {
+  orderCounter += 1;
+  return `ord_${Date.now().toString(36)}_${orderCounter}`;
+}
+
+function clampPrice(price: number): number {
+  return Math.max(0.001, Math.min(0.999, price));
+}
+
+function csvCell(value: string): string {
+  return `"${value.replaceAll("\"", "\"\"")}"`;
 }

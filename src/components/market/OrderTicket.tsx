@@ -1,50 +1,38 @@
 import { useMemo, useState } from "react";
-import type { Market, Outcome, OrderType, Side } from "@/lib/sim/types";
-import { useSimStore, selectMidpoint } from "@/lib/store/sim-store";
-import { totalCostBuy, calcFee } from "@/lib/sim/matching";
 import { toast } from "sonner";
+import type { Market, OrderType, Outcome, Side, TimeInForce } from "@/lib/sim/types";
+import { estimateExecution } from "@/lib/sim/matching";
+import { selectMidpoint, useSimStore } from "@/lib/store/sim-store";
 
 export function OrderTicket({ market }: { market: Market }) {
-  const book = useSimStore((s) => s.books[market.id]);
-  const placeOrder = useSimStore((s) => s.placeOrder);
-  const portfolio = useSimStore((s) => s.portfolio);
+  const book = useSimStore((state) => state.books[market.id]);
+  const placeOrder = useSimStore((state) => state.placeOrder);
+  const portfolio = useSimStore((state) => state.portfolio);
 
   const [outcome, setOutcome] = useState<Outcome>("UP");
   const [side, setSide] = useState<Side>("BUY");
   const [type, setType] = useState<OrderType>("MARKET");
+  const [timeInForce, setTimeInForce] = useState<TimeInForce>("GTC");
+  const [gtdMinutes, setGtdMinutes] = useState(5);
   const [size, setSize] = useState(10);
   const [limitCents, setLimitCents] = useState(50);
   const [postOnly, setPostOnly] = useState(false);
 
-  const ob = book?.[outcome];
+  const outcomeBook = book?.[outcome];
   const mid = selectMidpoint(book, outcome);
-  const midCents = mid != null ? Math.round(mid * 100) : 50;
+  const available = portfolio.cash - portfolio.reserved;
+  const position = portfolio.positions.find((item) => item.tokenId === market.clobTokenIds[outcome]);
 
   const estimate = useMemo(() => {
-    if (!ob) return null;
-    if (side === "SELL") {
-      // approximate at best bid
-      const best = ob.bids[0]?.price ?? 0;
-      const fee = calcFee(size, best);
-      return { cost: size * best, fee, fillable: size };
-    }
-    if (type === "MARKET") {
-      const { cost, canFill } = totalCostBuy({ size, filled: 0 } as any, ob);
-      const avg = canFill > 0 ? cost / canFill : 0;
-      return { cost, fee: calcFee(canFill, avg || 0.5), fillable: canFill };
-    }
-    if (type === "FOK") {
-      const { cost, canFill } = totalCostBuy({ size, filled: 0 } as any, ob, limitCents / 100);
-      const avg = canFill > 0 ? cost / canFill : 0;
-      return { cost, fee: calcFee(canFill, avg || 0.5), fillable: canFill };
-    }
-    // LIMIT
-    return {
-      cost: size * (limitCents / 100),
-      fee: postOnly ? 0 : calcFee(size, limitCents / 100),
-      fillable: size,
-    };
-  }, [ob, side, type, size, limitCents, postOnly]);
+    if (!outcomeBook) return null;
+    return estimateExecution({
+      side,
+      size,
+      book: outcomeBook,
+      limitPrice: type === "MARKET" ? undefined : limitCents / 100,
+      feeRateBps: postOnly && type === "LIMIT" ? 0 : market.feeRateBps,
+    });
+  }, [outcomeBook, side, size, type, limitCents, postOnly, market.feeRateBps]);
 
   const submit = () => {
     const res = placeOrder({
@@ -52,152 +40,141 @@ export function OrderTicket({ market }: { market: Market }) {
       outcome,
       side,
       type,
+      timeInForce,
       sizeShares: size,
       limitCents: type === "MARKET" ? undefined : limitCents,
-      postOnly,
+      postOnly: type === "LIMIT" && postOnly,
+      expiresAt: timeInForce === "GTD" ? Date.now() + gtdMinutes * 60_000 : undefined,
     });
-    if (!res.ok) toast.error(res.message ?? "Order rejected");
-    else toast.success(`${side} ${size} ${outcome} order placed`);
+    if (!res.ok) toast.error(res.message ?? "Ordre rejeté");
+    else toast.success(`${side} ${size} ${market.outcomeLabels[outcome]} envoyé`);
   };
 
-  const available = portfolio.cash - portfolio.reserved;
-  const position = portfolio.positions.find((p) => p.marketId === market.id && p.outcome === outcome);
+  const canTrade = market.state === "LIVE" || market.state === "CLOSING";
 
   return (
-    <div className="rounded-lg border border-hairline bg-surface p-3 text-sm space-y-3">
+    <div className="space-y-3 rounded-lg border border-hairline bg-surface p-3 text-sm">
       <div className="grid grid-cols-2 gap-2">
-        <button
-          onClick={() => { setOutcome("UP"); setLimitCents(midCents || 50); }}
-          className={`py-2 rounded-md border text-sm font-semibold ${
-            outcome === "UP"
-              ? "bg-up text-background border-up"
-              : "border-hairline text-up hover:bg-up/10"
-          }`}
-        >
-          Up
-        </button>
-        <button
-          onClick={() => { setOutcome("DOWN"); setLimitCents(midCents || 50); }}
-          className={`py-2 rounded-md border text-sm font-semibold ${
-            outcome === "DOWN"
-              ? "bg-down text-background border-down"
-              : "border-hairline text-down hover:bg-down/10"
-          }`}
-        >
-          Down
-        </button>
+        <OutcomeButton active={outcome === "UP"} tone="up" onClick={() => setOutcome("UP")} label={market.outcomeLabels.UP} />
+        <OutcomeButton active={outcome === "DOWN"} tone="down" onClick={() => setOutcome("DOWN")} label={market.outcomeLabels.DOWN} />
       </div>
 
-      <div className="flex gap-1 text-xs">
-        {(["BUY", "SELL"] as Side[]).map((s) => (
+      <div className="grid grid-cols-2 gap-2 text-xs">
+        {(["BUY", "SELL"] as Side[]).map((value) => (
           <button
-            key={s}
-            onClick={() => setSide(s)}
-            className={`flex-1 py-1 rounded ${side === s ? "bg-accent text-foreground" : "text-muted-foreground hover:text-foreground"}`}
+            key={value}
+            type="button"
+            onClick={() => setSide(value)}
+            className={`h-9 rounded-md border font-semibold ${side === value ? "border-primary bg-primary text-primary-foreground" : "border-hairline text-muted-foreground"}`}
           >
-            {s === "BUY" ? "Acheter" : "Vendre"}
+            {value === "BUY" ? "Acheter" : "Vendre"}
           </button>
         ))}
-        <select
-          value={type}
-          onChange={(e) => setType(e.target.value as OrderType)}
-          className="ml-auto bg-surface-2 border border-hairline rounded px-2 py-1 text-xs"
-        >
-          <option value="MARKET">Marché</option>
-          <option value="LIMIT">Limite</option>
-          <option value="FOK">FOK</option>
-        </select>
       </div>
 
+      <div className="grid grid-cols-2 gap-2">
+        <label className="space-y-1">
+          <span className="text-xs text-muted-foreground">Type</span>
+          <select value={type} onChange={(event) => setType(event.target.value as OrderType)} className="h-9 w-full rounded-md border border-hairline bg-surface-2 px-2 text-xs">
+            <option value="MARKET">Market</option>
+            <option value="LIMIT">Limit</option>
+            <option value="FOK">FOK</option>
+            <option value="FAK">FAK</option>
+          </select>
+        </label>
+        <label className="space-y-1">
+          <span className="text-xs text-muted-foreground">Durée</span>
+          <select value={timeInForce} onChange={(event) => setTimeInForce(event.target.value as TimeInForce)} className="h-9 w-full rounded-md border border-hairline bg-surface-2 px-2 text-xs">
+            <option value="GTC">GTC</option>
+            <option value="GTD">GTD</option>
+          </select>
+        </label>
+      </div>
+
+      {timeInForce === "GTD" && (
+        <NumberInput label="Expiration GTD (min)" min={1} max={180} value={gtdMinutes} onChange={setGtdMinutes} />
+      )}
+
       {type !== "MARKET" && (
-        <div>
-          <label className="text-xs text-muted-foreground">Prix limite (¢)</label>
-          <div className="flex items-center gap-1 mt-1">
-            <button
-              type="button"
-              onClick={() => setLimitCents((c) => Math.max(1, c - 1))}
-              className="h-8 w-8 rounded bg-surface-2 border border-hairline"
-            >−</button>
-            <input
-              type="number"
-              min={1}
-              max={99}
-              value={limitCents}
-              onChange={(e) => setLimitCents(Math.max(1, Math.min(99, Number(e.target.value))))}
-              className="flex-1 h-8 bg-surface-2 border border-hairline rounded text-center num"
-            />
-            <button
-              type="button"
-              onClick={() => setLimitCents((c) => Math.min(99, c + 1))}
-              className="h-8 w-8 rounded bg-surface-2 border border-hairline"
-            >+</button>
-          </div>
+        <div className="space-y-2">
+          <NumberInput label="Prix limite (¢)" min={1} max={99} value={limitCents} onChange={setLimitCents} />
           {type === "LIMIT" && (
-            <label className="text-xs flex items-center gap-2 mt-2 text-muted-foreground">
-              <input type="checkbox" checked={postOnly} onChange={(e) => setPostOnly(e.target.checked)} />
-              Post-only (maker, 0 fee)
+            <label className="flex items-center gap-2 text-xs text-muted-foreground">
+              <input type="checkbox" checked={postOnly} onChange={(event) => setPostOnly(event.target.checked)} />
+              Post-only maker
             </label>
           )}
         </div>
       )}
 
-      <div>
-        <label className="text-xs text-muted-foreground">Positions (shares)</label>
-        <div className="flex items-center gap-1 mt-1">
-          <input
-            type="number"
-            min={1}
-            value={size}
-            onChange={(e) => setSize(Math.max(1, Number(e.target.value)))}
-            className="flex-1 h-9 bg-surface-2 border border-hairline rounded text-center num"
-          />
-        </div>
-        <div className="flex gap-1 mt-1">
-          {[1, 5, 10, 50, 100].map((n) => (
-            <button
-              key={n}
-              type="button"
-              onClick={() => setSize((s) => s + n)}
-              className="flex-1 text-xs py-1 rounded bg-surface-2 border border-hairline hover:bg-accent"
-            >+{n}</button>
-          ))}
-        </div>
+      <NumberInput label="Shares" min={market.orderMinSize} max={100_000} value={size} onChange={setSize} />
+
+      <div className="grid grid-cols-5 gap-1">
+        {[1, 5, 10, 50, 100].map((value) => (
+          <button key={value} type="button" onClick={() => setSize((current) => current + value)} className="rounded border border-hairline bg-surface-2 py-1 text-xs">
+            +{value}
+          </button>
+        ))}
       </div>
 
-      <div className="text-xs space-y-1 border-t border-hairline pt-2">
+      <div className="space-y-1 border-t border-hairline pt-2 text-xs">
         <Row label="Disponible" value={`$${available.toFixed(2)}`} />
-        {position && position.size > 0 && (
-          <Row label="Position actuelle" value={`${position.size.toFixed(0)} @ ${Math.round(position.avgPrice * 100)}¢`} />
-        )}
+        <Row label="Mid" value={mid != null ? `${Math.round(mid * 100)}¢` : "—"} />
+        {position && <Row label="Position" value={`${position.size.toFixed(2)} @ ${Math.round(position.avgPrice * 100)}¢`} />}
         {estimate && (
           <>
-            <Row label="Coût estimé" value={`$${estimate.cost.toFixed(2)}`} />
-            <Row label="Frais (taker 7%)" value={`$${estimate.fee.toFixed(4)}`} />
-            <Row label="Remplissable" value={`${estimate.fillable.toFixed(0)} / ${size}`} />
-            <Row
-              label="Pour gagner"
-              value={`$${(estimate.fillable * 1 - estimate.cost - estimate.fee).toFixed(2)}`}
-              accent="up"
-            />
+            <Row label="Remplissable" value={`${estimate.fillable.toFixed(2)} / ${size}`} />
+            <Row label={side === "BUY" ? "Coût estimé" : "Produit estimé"} value={`$${estimate.cost.toFixed(2)}`} />
+            <Row label="Frais estimés" value={`$${estimate.fee.toFixed(5)}`} />
+            <Row label="Slippage" value={`${(estimate.slippage * 100).toFixed(2)}¢`} />
+            <Row label="Break-even" value={estimate.fillable > 0 ? `${Math.round(((estimate.cost + estimate.fee) / estimate.fillable) * 100)}¢` : "—"} />
           </>
         )}
       </div>
 
       <button
+        type="button"
+        disabled={!canTrade || !outcomeBook}
         onClick={submit}
-        className="w-full py-2.5 rounded-md bg-primary text-primary-foreground font-semibold hover:opacity-90"
+        className="h-10 w-full rounded-md bg-primary font-semibold text-primary-foreground disabled:cursor-not-allowed disabled:opacity-40"
       >
-        Négocier
+        Envoyer l’ordre paper
       </button>
     </div>
   );
 }
 
-function Row({ label, value, accent }: { label: string; value: string; accent?: "up" | "down" }) {
+function OutcomeButton({ active, tone, label, onClick }: { active: boolean; tone: "up" | "down"; label: string; onClick: () => void }) {
+  const activeClass = tone === "up" ? "border-up bg-up text-background" : "border-down bg-down text-background";
+  const idleClass = tone === "up" ? "border-hairline text-up" : "border-hairline text-down";
   return (
-    <div className="flex justify-between">
+    <button type="button" onClick={onClick} className={`h-10 truncate rounded-md border px-2 text-sm font-semibold ${active ? activeClass : idleClass}`}>
+      {label}
+    </button>
+  );
+}
+
+function NumberInput({ label, min, max, value, onChange }: { label: string; min: number; max: number; value: number; onChange: (value: number) => void }) {
+  return (
+    <label className="block space-y-1">
+      <span className="text-xs text-muted-foreground">{label}</span>
+      <input
+        type="number"
+        min={min}
+        max={max}
+        value={value}
+        onChange={(event) => onChange(Math.max(min, Math.min(max, Number(event.target.value))))}
+        className="num h-9 w-full rounded-md border border-hairline bg-surface-2 px-3 text-center"
+      />
+    </label>
+  );
+}
+
+function Row({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex justify-between gap-3">
       <span className="text-muted-foreground">{label}</span>
-      <span className={`num ${accent === "up" ? "text-up" : accent === "down" ? "text-down" : ""}`}>{value}</span>
+      <span className="num text-right">{value}</span>
     </div>
   );
 }
