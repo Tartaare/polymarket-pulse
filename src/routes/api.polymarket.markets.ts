@@ -41,7 +41,23 @@ async function fetchGammaMarkets(): Promise<GammaMarket[]> {
     order: "endDate",
     ascending: "true",
   });
-  const queries = ["bitcoin up down", "ethereum up down", "solana up down", "btc up down", "eth up down", "sol up down"];
+  const queries = [
+    "bitcoin up down",
+    "ethereum up down",
+    "solana up down",
+    "btc up down",
+    "eth up down",
+    "sol up down",
+    "bitcoin up down 1 hour",
+    "ethereum up down 1 hour",
+    "solana up down 1 hour",
+    "btc updown 1h",
+    "eth updown 1h",
+    "sol updown 1h",
+    "btc-updown-1h",
+    "eth-updown-1h",
+    "sol-updown-1h",
+  ];
   const urls = queries.flatMap((query) => {
     const search = new URLSearchParams(base);
     search.set("q", query);

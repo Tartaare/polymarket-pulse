@@ -59,6 +59,12 @@ function Browse() {
         </div>
       </section>
 
+      <section className="grid gap-2 sm:grid-cols-3">
+        <WindowStat label="5m" count={mounted ? countWindow(markets, 5) : null} />
+        <WindowStat label="15m" count={mounted ? countWindow(markets, 15) : null} />
+        <WindowStat label="1h" count={mounted ? countWindow(markets, 60) : null} />
+      </section>
+
       <section className="flex flex-wrap items-center gap-2">
         <input
           placeholder="Rechercher slug, question, token…"
@@ -136,6 +142,19 @@ function Stat({ label, value }: { label: string; value: string }) {
       <div className="num font-semibold capitalize">{value}</div>
     </div>
   );
+}
+
+function WindowStat({ label, count }: { label: string; count: number | null }) {
+  return (
+    <div className="rounded-md border border-hairline bg-surface px-3 py-2">
+      <div className="text-[10px] uppercase text-muted-foreground">{label}</div>
+      <div className="num text-sm font-semibold">{count == null ? "—" : count}</div>
+    </div>
+  );
+}
+
+function countWindow(markets: Record<string, Market>, windowMin: WindowMin): number {
+  return Object.values(markets).filter((market) => market.windowMin === windowMin).length;
 }
 
 function matchesQuery(market: Market, query: string): boolean {
