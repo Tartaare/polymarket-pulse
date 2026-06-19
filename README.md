@@ -12,6 +12,7 @@ Application locale non-commerciale de paper trading pour s'entraîner sur les vr
 - Paper execution locale : `MARKET`, `LIMIT`, `FOK`, `FAK`, `GTC`, `GTD`, post-only, partial fills.
 - Frais par token via `/fee-rate`, avec fallback sur les champs marché Gamma.
 - Portefeuille virtuel persisté en IndexedDB : ordres, fills, positions, equity curve et snapshots récents.
+- Documentation détaillée du système marchés : `market.md`.
 
 ## Fonctionnalités utilisateur
 
@@ -85,6 +86,7 @@ npm run dev
 - `npm run lint` : ESLint.
 - `npm run format` : Prettier.
 - `npx tsc --noEmit` : vérification TypeScript.
+- `npm run test` : vérification live de la discovery Polymarket avec certificats système.
 
 ## Architecture principale
 

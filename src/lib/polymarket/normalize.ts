@@ -7,10 +7,12 @@ const DEFAULT_FEE_BPS_BY_RATE = 700;
 export interface GammaMarket {
   id?: string;
   question?: string | null;
+  description?: string | null;
   conditionId?: string | null;
   slug?: string | null;
   startDate?: string | null;
   startDateIso?: string | null;
+  eventStartTime?: string | null;
   endDate?: string | null;
   endDateIso?: string | null;
   closed?: boolean | null;
@@ -29,6 +31,7 @@ export interface GammaMarket {
   liquidityNum?: number | null;
   volume?: string | null;
   liquidity?: string | null;
+  tags?: { id?: string; slug?: string; label?: string }[] | null;
 }
 
 export function normalizeGammaMarket(raw: GammaMarket, now = Date.now()): Market | null {
@@ -37,8 +40,13 @@ export function normalizeGammaMarket(raw: GammaMarket, now = Date.now()): Market
   const conditionId = raw.conditionId?.trim();
   if (!slug || !conditionId) return null;
 
-  const asset = inferAsset(`${slug} ${question}`);
-  const windowMin = inferWindow(`${slug} ${question}`, raw.startDate ?? raw.startDateIso, raw.endDate ?? raw.endDateIso);
+  const text = [slug, question, raw.description?.trim() ?? ""].filter(Boolean).join(" ");
+  if (!isUpOrDownMarket(text, raw.tags)) return null;
+
+  const asset = inferAsset(text);
+  const startDate = parseDate(raw.eventStartTime) ?? parseDate(raw.startDate) ?? parseDate(raw.startDateIso);
+  const endDate = parseDate(raw.endDate) ?? parseDate(raw.endDateIso);
+  const windowMin = inferWindow(text, startDate, endDate, raw.tags);
   if (!asset || !windowMin) return null;
 
   const outcomesRaw = parseStringArray(raw.outcomes);
@@ -49,8 +57,6 @@ export function normalizeGammaMarket(raw: GammaMarket, now = Date.now()): Market
   const outcomeIndexes = mapOutcomeIndexes(outcomesRaw);
   if (!outcomeIndexes) return null;
 
-  const startDate = parseDate(raw.startDate) ?? parseDate(raw.startDateIso);
-  const endDate = parseDate(raw.endDate) ?? parseDate(raw.endDateIso);
   if (!endDate) return null;
 
   const active = raw.active !== false;
@@ -110,22 +116,31 @@ export function updateMarketStatus(market: Market, now = Date.now()): Market {
 
 function inferAsset(text: string): Asset | null {
   const upper = text.toUpperCase();
-  return ASSETS.find((asset) => upper.includes(asset) || upper.includes(assetName(asset))) ?? null;
+  if (/\bBTC\b|BITCOIN/.test(upper)) return "BTC";
+  if (/\bETH\b|ETHEREUM/.test(upper)) return "ETH";
+  if (/\bSOL\b|SOLANA/.test(upper)) return "SOL";
+  return null;
 }
 
-function assetName(asset: Asset): string {
-  if (asset === "BTC") return "BITCOIN";
-  if (asset === "ETH") return "ETHEREUM";
-  return "SOLANA";
+function isUpOrDownMarket(text: string, tags?: { slug?: string; label?: string }[] | null): boolean {
+  if (tags?.some((tag) => /(^|-)up-or-down($|-)/i.test(tag.slug ?? "") || /\bup or down\b/i.test(tag.label ?? ""))) {
+    return true;
+  }
+  return /\bup or down\b/i.test(text);
 }
 
-function inferWindow(text: string, start?: string | null, end?: string | null): WindowMin | null {
+function inferWindow(text: string, startMs?: number | null, endMs?: number | null, tags?: { slug?: string }[] | null): WindowMin | null {
+  if (tags) {
+    const hasTag = (slugPattern: RegExp) => tags.some((t) => t.slug && slugPattern.test(t.slug));
+    if (hasTag(/^5m$/i)) return 5;
+    if (hasTag(/^15m$/i)) return 15;
+    if (hasTag(/^1h$/i)) return 60;
+  }
+
   const lower = text.toLowerCase();
   if (/\b(5m|5-min|5 min|5-minute|5 minute)\b/.test(lower)) return 5;
   if (/\b(15m|15-min|15 min|15-minute|15 minute)\b/.test(lower)) return 15;
   if (/\b(1h|1-hour|1 hour|60m|60 min|60-minute)\b/.test(lower)) return 60;
-  const startMs = parseDate(start);
-  const endMs = parseDate(end);
   if (startMs && endMs) {
     const minutes = Math.round((endMs - startMs) / 60_000);
     return WINDOWS.find((windowMin) => Math.abs(windowMin - minutes) <= 1) ?? null;
@@ -156,10 +171,9 @@ function statusToState(status: PolymarketMarketStatus): Market["state"] {
 
 function mapOutcomeIndexes(outcomes: string[]): Record<Outcome, number> | null {
   const normalized = outcomes.map((outcome) => outcome.toLowerCase());
-  const up = normalized.findIndex((outcome) => /\b(up|yes|above|higher)\b/.test(outcome));
-  const down = normalized.findIndex((outcome) => /\b(down|no|below|lower)\b/.test(outcome));
+  const up = normalized.findIndex((outcome) => /\bup\b/.test(outcome));
+  const down = normalized.findIndex((outcome) => /\bdown\b/.test(outcome));
   if (up >= 0 && down >= 0 && up !== down) return { UP: up, DOWN: down };
-  if (outcomes.length === 2) return { UP: 0, DOWN: 1 };
   return null;
 }
 

@@ -180,18 +180,16 @@ export const useSimStore = createSimStore((set, get) => ({
       const response = await fetch("/api/polymarket/markets");
       if (!response.ok) throw new Error(`markets ${response.status}`);
       const data = (await response.json()) as { markets: Market[] };
-      const nextMarkets = { ...state.markets };
-      const nextBooks = { ...state.books };
+      const nextMarkets: Record<string, Market> = {};
+      const nextBooks: Record<string, MarketBook> = {};
       for (const market of data.markets) {
-        nextMarkets[market.id] = { ...nextMarkets[market.id], ...market };
-        if (!nextBooks[market.id]) {
-          nextBooks[market.id] = createEmptyMarketBook(
-            market.id,
-            market.conditionId,
-            market.clobTokenIds.UP,
-            market.clobTokenIds.DOWN,
-          );
-        }
+        nextMarkets[market.id] = { ...state.markets[market.id], ...market };
+        nextBooks[market.id] = state.books[market.id] ?? createEmptyMarketBook(
+          market.id,
+          market.conditionId,
+          market.clobTokenIds.UP,
+          market.clobTokenIds.DOWN,
+        );
       }
       set({ markets: nextMarkets, books: nextBooks, loadingMarkets: false, lastDiscoveryAt: Date.now() });
       void get().hydrateBooks(data.markets.map((market) => market.id));

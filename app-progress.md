@@ -49,3 +49,28 @@ Terminé.
 
 # Risques restants :
 - Aucun impact sur IndexedDB, le moteur paper trading ou les routes API.
+
+---
+
+# SPRINT 3 - Vérification marchés 5m/15m/1h + documentation système
+
+# Date :
+2026-06-19
+
+# Statut :
+Terminé.
+
+# Vérification :
+- Validation live relancée avec `npm run test` corrigé pour exécuter Node avec `--use-system-ca`.
+- Les marchés actifs récupérés depuis Gamma passent bien la normalisation et restent limités à `BTC`, `ETH`, `SOL` et aux fenêtres `5m`, `15m`, `1h`.
+- Validation observée le `2026-06-19` : des marchés `5m`, `15m` et `1h` étaient bien actifs, dont `bitcoin-up-or-down-june-19-2026-8am-et`.
+- Le normaliseur couvre désormais explicitement les cas où `1h` n'est pas dans le `slug` ni la `question`, mais seulement dans les `tags`, la `description` ou `eventStartTime`.
+- Correction TypeScript locale sur `vite.config.ts` pour rétablir `npx tsc --noEmit` et le build.
+
+# Documentation :
+- Ajout de `market.md` pour décrire précisément la discovery, la normalisation, les carnets, le WebSocket CLOB, le paper trading et les limites opérationnelles.
+
+# Validation :
+- `npm run test` : OK.
+- `npx tsc --noEmit` : OK.
+- `npm run build` : OK.

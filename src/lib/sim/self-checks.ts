@@ -27,6 +27,54 @@ function checkGammaParsing(): void {
   assert(market?.asset === "BTC", "Gamma parser infers BTC");
   assert(market.windowMin === 5, "Gamma parser infers 5m window");
   assert(market.clobTokenIds.UP === "up-token", "Gamma parser maps UP token");
+
+  const hourly = normalizeGammaMarket({
+    slug: "bitcoin-up-or-down-june-19-2026-8am-et",
+    question: "Bitcoin Up or Down - June 19, 8AM ET",
+    description: "This market will resolve to \"Up\" if the close price is greater than or equal to the open price for the BTC/USDT 1 hour candle.",
+    conditionId: "0xhour",
+    eventStartTime: "2026-06-19T12:00:00Z",
+    endDate: "2026-06-19T13:00:00Z",
+    outcomes: JSON.stringify(["Up", "Down"]),
+    outcomePrices: JSON.stringify(["0.28", "0.72"]),
+    clobTokenIds: JSON.stringify(["up-hour", "down-hour"]),
+    active: true,
+    closed: false,
+    archived: false,
+  });
+  assert(hourly?.windowMin === 60, "Gamma parser infers 1h window from description or eventStartTime");
+
+  const unrelated = normalizeGammaMarket({
+    slug: "hyperliquid-up-or-down-june-19-2026-8am-et",
+    question: "Hyperliquid Up or Down - June 19, 8AM ET",
+    description: "This market will resolve according to a 1 hour candle and its resolution source.",
+    conditionId: "0xother",
+    eventStartTime: "2026-06-19T12:00:00Z",
+    endDate: "2026-06-19T13:00:00Z",
+    outcomes: JSON.stringify(["Up", "Down"]),
+    outcomePrices: JSON.stringify(["0.28", "0.72"]),
+    clobTokenIds: JSON.stringify(["up-other", "down-other"]),
+    active: true,
+    closed: false,
+    archived: false,
+  });
+  assert(unrelated === null, "Gamma parser rejects non-BTC/ETH/SOL markets");
+
+  const threshold = normalizeGammaMarket({
+    slug: "bitcoin-above-62600-on-june-19-2026-9am-et",
+    question: "Bitcoin above 62,600 on June 19, 9AM ET?",
+    description: "This market resolves Yes if Bitcoin is above a threshold at the close of the 1 hour candle.",
+    conditionId: "0xthreshold",
+    eventStartTime: "2026-06-19T13:00:00Z",
+    endDate: "2026-06-19T14:00:00Z",
+    outcomes: JSON.stringify(["Yes", "No"]),
+    outcomePrices: JSON.stringify(["0.28", "0.72"]),
+    clobTokenIds: JSON.stringify(["yes-threshold", "no-threshold"]),
+    active: true,
+    closed: false,
+    archived: false,
+  });
+  assert(threshold === null, "Gamma parser rejects non Up or Down market types");
 }
 
 function checkBookReducer(): void {
