@@ -1,9 +1,10 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
+import { useMemo } from "react";
 import { Countdown } from "@/components/market/Countdown";
 import { OrderBookTable } from "@/components/market/OrderBookTable";
 import { OrderTicket } from "@/components/market/OrderTicket";
 import { selectDisplayPrice, useSimStore } from "@/lib/store/sim-store";
-import type { Outcome } from "@/lib/sim/types";
+import type { Outcome, OutcomeBook } from "@/lib/sim/types";
 
 export const Route = createFileRoute("/market/$marketId")({
   head: ({ params }) => ({
@@ -20,7 +21,11 @@ function MarketDetail() {
   const market = useSimStore((state) => state.markets[marketId]);
   const book = useSimStore((state) => state.books[marketId]);
   const clobStatus = useSimStore((state) => state.clobStatus);
-  const fills = useSimStore((state) => state.portfolio.fills.filter((fill) => fill.marketId === marketId).slice(-8).reverse());
+  const allFills = useSimStore((state) => state.portfolio.fills);
+  const fills = useMemo(
+    () => allFills.filter((fill) => fill.marketId === marketId).slice(-8).reverse(),
+    [allFills, marketId],
+  );
 
   if (!market) {
     return (
@@ -126,7 +131,7 @@ function MarketDetail() {
   );
 }
 
-function BookPanel({ title, price, outcome, book }: { title: string; price: number | null; outcome: Outcome; book: any }) {
+function BookPanel({ title, price, outcome, book }: { title: string; price: number | null; outcome: Outcome; book?: OutcomeBook }) {
   const tone = outcome === "UP" ? "up" : "down";
   return (
     <div className="rounded-lg border border-hairline bg-surface p-4">
