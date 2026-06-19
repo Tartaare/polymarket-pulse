@@ -1,3 +1,12 @@
+# TO DO
+
+
+
+
+## DONE
+
+
+
 L’app n’est pas une vraie app de paper trading Polymarket. C’est plutôt un simulateur crypto Up/Down maison, basé sur le prix spot Binance/Coinbase, avec carnet d’ordres synthétique. Pour notre objectif — s’entraîner sur les vrais marchés Polymarket crypto Up/Down 5m/15m/1h — elle est trop éloignée de la réalité.
 
 Modifications:
