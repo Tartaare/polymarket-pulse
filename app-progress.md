@@ -27,3 +27,25 @@ Terminé côté implémentation locale. Validation TypeScript effectuée; build 
 # Commentaires :
 - Les anciens marchés locaux `currentWindowOpen`, le feed Binance/Coinbase et le carnet synthétique ont été retirés du runtime.
 - Aucun wallet et aucun ordre réel ne sont utilisés; le simulateur reste strictement paper.
+
+---
+
+# SPRINT 2 - Correction ouverture détail marché
+
+# Date :
+2026-06-19
+
+# Statut :
+Terminé.
+
+# Correction :
+- Suppression d'un sélecteur `useSyncExternalStore` instable dans la page détail marché.
+- Le filtrage des derniers fills paper est désormais dérivé via `useMemo` depuis la référence stable `portfolio.fills`.
+- Typage strict du panneau carnet avec `OutcomeBook` au lieu de `any`.
+
+# Validation :
+- `npx tsc --noEmit` : OK.
+- `npm run build` : OK.
+
+# Risques restants :
+- Aucun impact sur IndexedDB, le moteur paper trading ou les routes API.
