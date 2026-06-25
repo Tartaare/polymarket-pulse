@@ -128,7 +128,7 @@ function PortfolioPage() {
         right={openOrders.length > 0 && <button type="button" onClick={() => { cancelAll(); toast("Tous les ordres ouverts sont annulés"); }} className="text-xs text-muted-foreground hover:text-foreground">Annuler tout</button>}
       >
         {openOrders.length === 0 ? <Empty /> : (
-          <Table headers={["Marché", "Outcome", "Side", "Type", "TIF", "Prix", "Size", "Rempli", ""]}>
+          <Table headers={["Marché", "Outcome", "Side", "Type", "Prix", "Size", "Rempli", ""]}>
             {openOrders.map((order) => {
               const market = markets[order.marketId];
               return (
@@ -137,7 +137,6 @@ function PortfolioPage() {
                   <td className={order.outcome === "UP" ? "text-up" : "text-down"}>{order.outcome}</td>
                   <td>{order.side}</td>
                   <td>{order.type}{order.postOnly ? " · PO" : ""}</td>
-                  <td>{order.timeInForce}</td>
                   <td className="num text-right">{order.limitPrice != null ? `${Math.round(order.limitPrice * 100)}¢` : "—"}</td>
                   <td className="num text-right">{order.size.toFixed(2)}</td>
                   <td className="num text-right">{order.filled.toFixed(2)}</td>

@@ -106,7 +106,6 @@ function checkExecutionEngine(): void {
     outcome: "UP",
     side: "BUY",
     type: "FAK",
-    timeInForce: "GTC",
     size: 12,
     filled: 0,
     avgFillPrice: 0,

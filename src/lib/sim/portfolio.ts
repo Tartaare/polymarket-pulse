@@ -64,13 +64,22 @@ export function positionPnl(position: Position, currentPrice: number): {
   return { currentValue, grossPnl, cashPnl, percentPnl, breakEven };
 }
 
-export function reservedForOrder(order: Order): number {
+import { calcFee } from "./matching";
+
+export function reservedForOrder(order: Order, feeRateBps: number): number {
   if (order.status !== "OPEN" && order.status !== "PARTIALLY_FILLED") return 0;
   if (order.side !== "BUY") return 0;
   if (order.limitPrice == null) return 0;
-  return Math.max(0, order.size - order.filled) * order.limitPrice;
+  const remaining = Math.max(0, order.size - order.filled);
+  const principal = remaining * order.limitPrice;
+  const fee = calcFee(remaining, order.limitPrice, feeRateBps);
+  return principal + fee;
 }
 
-export function totalReserved(orders: Order[]): number {
-  return orders.reduce((acc, order) => acc + reservedForOrder(order), 0);
+export function totalReserved(orders: Order[], markets: Record<string, { feeRateBps: number }>): number {
+  return orders.reduce((acc, order) => {
+    const market = markets[order.marketId];
+    const feeRateBps = market?.feeRateBps ?? 700;
+    return acc + reservedForOrder(order, feeRateBps);
+  }, 0);
 }

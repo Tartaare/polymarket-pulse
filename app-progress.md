@@ -74,3 +74,29 @@ Terminé.
 - `npm run test` : OK.
 - `npx tsc --noEmit` : OK.
 - `npm run build` : OK.
+
+---
+
+# SPRINT 4 - Migration SQLite + Fidélité Polymarket
+
+# Date :
+2026-06-25
+
+# Statut :
+Terminé.
+
+# Composants & Améliorations :
+- **SQLite server-side** : Remplacement d'IndexedDB par SQLite (`better-sqlite3`) avec un schéma complet et persistance par transaction atomique. Migration douce de l'ancienne base IndexedDB vers SQLite au premier chargement client.
+- **Types d'ordres Polymarket** : Unification sous `PolymarketOrderType` ("GTC", "GTD", "FOK", "FAK"). Simplification de l'Order Ticket UI à un select unique de 5 options sans combinaisons absurdes.
+- **Reliquat FAK** : Annulation automatique du reste non exécuté des ordres FAK avec affectation du statut "FILLED" et conservation de la taille annulée dans `cancelledRemainder`.
+- **Validation Tick Size** : Validation stricte des prix limites au tick size du marché et snap au step correct dans l'input UI du ticket d'ordre.
+- **Résolution Enrichie** : Distinction entre expiration (`ENDED`), attente (`AWAITING_RESOLUTION`) et confirmation Gamma (`RESOLVED`). Annulation automatique des ordres ouverts sur les marchés expirés.
+- **Discovery Résolution Gamma** : Polling robuste via `/api/polymarket/resolved` pour les marchés en portefeuille expirés depuis > 30s. Conservation des marchés terminés actifs dans le store lors des scans.
+- **Shadow Book** : Simulation et mise à jour de la liquidité virtuelle locale après chaque fill paper pour empêcher le double-spend de liquidité avant réception du tick CLOB.
+- **Réserves Cash avec Frais** : Inclusion des frais taker estimés dans les réserves bloquées des ordres d'achat ouverts.
+- **Events CLOB étendus** : Gestion et dispatch dans le store des événements WebSocket `best_bid_ask` et `tick_size_change`.
+
+# Validation :
+- `npx tsc --noEmit` : OK.
+- `npm run test` : OK.
+- `npm run build` : OK.

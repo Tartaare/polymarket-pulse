@@ -2,11 +2,10 @@ export type Asset = "BTC" | "ETH" | "SOL";
 export type WindowMin = 5 | 15 | 60;
 export type Outcome = "UP" | "DOWN";
 export type Side = "BUY" | "SELL";
-export type OrderType = "MARKET" | "LIMIT" | "FOK" | "FAK";
-export type TimeInForce = "GTC" | "GTD";
+export type PolymarketOrderType = "GTC" | "GTD" | "FOK" | "FAK";
 export type OrderStatus = "OPEN" | "PARTIALLY_FILLED" | "FILLED" | "CANCELLED" | "EXPIRED" | "REJECTED";
-export type MarketState = "UPCOMING" | "LIVE" | "CLOSING" | "RESOLVED";
-export type PolymarketMarketStatus = "upcoming" | "live" | "closing" | "resolved";
+export type MarketState = "UPCOMING" | "LIVE" | "CLOSING" | "ENDED" | "AWAITING_RESOLUTION" | "RESOLVED";
+export type PolymarketMarketStatus = "upcoming" | "live" | "closing" | "ended" | "awaiting_resolution" | "resolved";
 
 export interface PolymarketToken {
   outcome: Outcome;
@@ -79,6 +78,8 @@ export interface MarketBook {
   conditionId: string;
   UP: OutcomeBook;
   DOWN: OutcomeBook;
+  shadowUP?: OutcomeBook;
+  shadowDOWN?: OutcomeBook;
   updatedAt: number;
   source: "clob";
 }
@@ -89,8 +90,7 @@ export interface Order {
   tokenId: string;
   outcome: Outcome;
   side: Side;
-  type: OrderType;
-  timeInForce: TimeInForce;
+  type: PolymarketOrderType;
   limitPrice?: number;
   expiresAt?: number;
   size: number;
@@ -103,6 +103,7 @@ export interface Order {
   feesPaid: number;
   grossProceeds: number;
   rejectionReason?: string;
+  cancelledRemainder?: number;
 }
 
 export interface Fill {

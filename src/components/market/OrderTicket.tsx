@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
-import type { Market, OrderType, Outcome, Side, TimeInForce } from "@/lib/sim/types";
+import type { Market, PolymarketOrderType, Outcome, Side } from "@/lib/sim/types";
 import { estimateExecution } from "@/lib/sim/matching";
 import { selectMidpoint, useSimStore } from "@/lib/store/sim-store";
 
@@ -11,8 +11,7 @@ export function OrderTicket({ market }: { market: Market }) {
 
   const [outcome, setOutcome] = useState<Outcome>("UP");
   const [side, setSide] = useState<Side>("BUY");
-  const [type, setType] = useState<OrderType>("MARKET");
-  const [timeInForce, setTimeInForce] = useState<TimeInForce>("GTC");
+  const [selectedType, setSelectedType] = useState<"MARKET" | PolymarketOrderType>("MARKET");
   const [gtdMinutes, setGtdMinutes] = useState(5);
   const [size, setSize] = useState(10);
   const [limitCents, setLimitCents] = useState(50);
@@ -25,26 +24,30 @@ export function OrderTicket({ market }: { market: Market }) {
 
   const estimate = useMemo(() => {
     if (!outcomeBook) return null;
+    const estType = selectedType === "MARKET" ? "FAK" : selectedType;
+    const estLimit = selectedType === "MARKET" ? undefined : limitCents / 100;
     return estimateExecution({
       side,
       size,
       book: outcomeBook,
-      limitPrice: type === "MARKET" ? undefined : limitCents / 100,
-      feeRateBps: postOnly && type === "LIMIT" ? 0 : market.feeRateBps,
+      limitPrice: estLimit,
+      feeRateBps: postOnly && (selectedType === "GTC" || selectedType === "GTD") ? 0 : market.feeRateBps,
     });
-  }, [outcomeBook, side, size, type, limitCents, postOnly, market.feeRateBps]);
+  }, [outcomeBook, side, size, selectedType, limitCents, postOnly, market.feeRateBps]);
 
   const submit = () => {
+    const isMarket = selectedType === "MARKET";
+    const storeType = isMarket ? "FAK" : selectedType;
+    const storeLimit = isMarket ? undefined : limitCents;
     const res = placeOrder({
       marketId: market.id,
       outcome,
       side,
-      type,
-      timeInForce,
+      type: storeType,
       sizeShares: size,
-      limitCents: type === "MARKET" ? undefined : limitCents,
-      postOnly: type === "LIMIT" && postOnly,
-      expiresAt: timeInForce === "GTD" ? Date.now() + gtdMinutes * 60_000 : undefined,
+      limitCents: storeLimit,
+      postOnly: !isMarket && postOnly,
+      expiresAt: selectedType === "GTD" ? Date.now() + gtdMinutes * 60_000 : undefined,
     });
     if (!res.ok) toast.error(res.message ?? "Ordre rejeté");
     else toast.success(`${side} ${size} ${market.outcomeLabels[outcome]} envoyé`);
@@ -72,33 +75,34 @@ export function OrderTicket({ market }: { market: Market }) {
         ))}
       </div>
 
-      <div className="grid grid-cols-2 gap-2">
+      <div className="grid grid-cols-1 gap-2">
         <label className="space-y-1">
-          <span className="text-xs text-muted-foreground">Type</span>
-          <select value={type} onChange={(event) => setType(event.target.value as OrderType)} className="h-9 w-full rounded-md border border-hairline bg-surface-2 px-2 text-xs">
-            <option value="MARKET">Market</option>
-            <option value="LIMIT">Limit</option>
-            <option value="FOK">FOK</option>
-            <option value="FAK">FAK</option>
-          </select>
-        </label>
-        <label className="space-y-1">
-          <span className="text-xs text-muted-foreground">Durée</span>
-          <select value={timeInForce} onChange={(event) => setTimeInForce(event.target.value as TimeInForce)} className="h-9 w-full rounded-md border border-hairline bg-surface-2 px-2 text-xs">
-            <option value="GTC">GTC</option>
-            <option value="GTD">GTD</option>
+          <span className="text-xs text-muted-foreground">Type d'ordre</span>
+          <select value={selectedType} onChange={(event) => setSelectedType(event.target.value as any)} className="h-9 w-full rounded-md border border-hairline bg-surface-2 px-2 text-xs">
+            <option value="MARKET">Market (FAK)</option>
+            <option value="GTC">Limit GTC</option>
+            <option value="GTD">Limit GTD</option>
+            <option value="FOK">FOK (Fill-Or-Kill)</option>
+            <option value="FAK">FAK (Immediate-Or-Cancel / Fill-And-Kill)</option>
           </select>
         </label>
       </div>
 
-      {timeInForce === "GTD" && (
+      {selectedType === "GTD" && (
         <NumberInput label="Expiration GTD (min)" min={1} max={180} value={gtdMinutes} onChange={setGtdMinutes} />
       )}
 
-      {type !== "MARKET" && (
+      {selectedType !== "MARKET" && (
         <div className="space-y-2">
-          <NumberInput label="Prix limite (¢)" min={1} max={99} value={limitCents} onChange={setLimitCents} />
-          {type === "LIMIT" && (
+          <NumberInput
+            label="Prix limite (¢)"
+            min={0.1}
+            max={99.9}
+            step={market.tickSize * 100}
+            value={limitCents}
+            onChange={setLimitCents}
+          />
+          {(selectedType === "GTC" || selectedType === "GTD") && (
             <label className="flex items-center gap-2 text-xs text-muted-foreground">
               <input type="checkbox" checked={postOnly} onChange={(event) => setPostOnly(event.target.checked)} />
               Post-only maker
@@ -154,7 +158,28 @@ function OutcomeButton({ active, tone, label, onClick }: { active: boolean; tone
   );
 }
 
-function NumberInput({ label, min, max, value, onChange }: { label: string; min: number; max: number; value: number; onChange: (value: number) => void }) {
+function NumberInput({
+  label,
+  min,
+  max,
+  value,
+  step = 1,
+  onChange,
+}: {
+  label: string;
+  min: number;
+  max: number;
+  value: number;
+  step?: number;
+  onChange: (value: number) => void;
+}) {
+  const handleChange = (val: number) => {
+    const rounded = Math.round(val / step) * step;
+    const precision = step.toString().split(".")[1]?.length || 0;
+    const finalVal = Number(rounded.toFixed(precision));
+    onChange(Math.max(min, Math.min(max, finalVal)));
+  };
+
   return (
     <label className="block space-y-1">
       <span className="text-xs text-muted-foreground">{label}</span>
@@ -162,8 +187,9 @@ function NumberInput({ label, min, max, value, onChange }: { label: string; min:
         type="number"
         min={min}
         max={max}
+        step={step}
         value={value}
-        onChange={(event) => onChange(Math.max(min, Math.min(max, Number(event.target.value))))}
+        onChange={(event) => handleChange(Number(event.target.value))}
         className="num h-9 w-full rounded-md border border-hairline bg-surface-2 px-3 text-center"
       />
     </label>

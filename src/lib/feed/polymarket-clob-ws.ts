@@ -8,7 +8,8 @@ type MarketMessage =
   | { event_type: "book"; asset_id: string; market: string; bids: { price: string; size: string }[]; asks: { price: string; size: string }[]; timestamp: string; hash?: string }
   | { event_type: "price_change"; price_changes: Array<{ asset_id: string; price: string; size: string; side: Side; hash?: string }>; timestamp: string }
   | { event_type: "last_trade_price"; asset_id: string; price: string; size: string; side: Side; timestamp: string; fee_rate_bps?: string }
-  | { event_type: "best_bid_ask"; asset_id: string; timestamp: string }
+  | { event_type: "best_bid_ask"; asset_id: string; best_bid: string; best_ask: string; timestamp: string }
+  | { event_type: "tick_size_change"; asset_id: string; tick_size: string; timestamp: string }
   | { event_type: "market_resolved"; market: string; winning_asset_id?: string; winning_outcome?: string }
   | { event_type: "new_market" };
 
@@ -93,6 +94,23 @@ class PolymarketClobSocket {
         ts: Number(message.timestamp ?? Date.now()),
         feeRateBps: message.fee_rate_bps ? Number(message.fee_rate_bps) : undefined,
       });
+      return;
+    }
+    if (message.event_type === "best_bid_ask") {
+      store.applyBestBidAsk(
+        message.asset_id,
+        message.best_bid ? Number(message.best_bid) : null,
+        message.best_ask ? Number(message.best_ask) : null,
+        Number(message.timestamp ?? Date.now())
+      );
+      return;
+    }
+    if (message.event_type === "tick_size_change") {
+      store.applyTickSizeChange(
+        message.asset_id,
+        Number(message.tick_size),
+        Number(message.timestamp ?? Date.now())
+      );
       return;
     }
     if (message.event_type === "market_resolved") {

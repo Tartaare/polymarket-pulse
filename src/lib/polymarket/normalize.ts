@@ -156,7 +156,9 @@ function marketStatus(opts: {
   archived: boolean;
   now: number;
 }): PolymarketMarketStatus {
-  if (opts.closed || opts.archived || !opts.active || opts.now >= opts.endDate) return "resolved";
+  if (opts.closed) return "resolved";
+  if (opts.archived || !opts.active) return "resolved";
+  if (opts.now >= opts.endDate) return "ended";
   if (opts.startDate && opts.now < opts.startDate) return "upcoming";
   if (opts.endDate - opts.now <= 60_000) return "closing";
   return "live";
@@ -165,6 +167,8 @@ function marketStatus(opts: {
 function statusToState(status: PolymarketMarketStatus): Market["state"] {
   if (status === "upcoming") return "UPCOMING";
   if (status === "closing") return "CLOSING";
+  if (status === "ended") return "ENDED";
+  if (status === "awaiting_resolution") return "AWAITING_RESOLUTION";
   if (status === "resolved") return "RESOLVED";
   return "LIVE";
 }
