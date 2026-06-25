@@ -129,4 +129,4 @@ Toutes les animations doivent rester sous 150 ms, sauf le spinner de résolution
 
 Design:
 Penser au responsive pour l'ensemble du projet, ainsi qu'à l'alignement / positionnement des éléments, aux modes jour/nuit, etc. Pour une UI/UX professionnelle.
-Utiliser des design tokens afin de garantir la cohérence du design sur l'ensemble du projet.
+Update @design_language.md si nécessaire, on veut avoir des tokens design à jour.

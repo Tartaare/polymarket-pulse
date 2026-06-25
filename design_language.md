@@ -291,11 +291,25 @@ Binance's radius hierarchy is tighter than typical marketing systems — most su
 6. Numbers always use BinancePlex; copy always uses BinanceNova. Mixing them is a system violation.
 7. Trading green / red are semantic price tokens — never repurpose them for "success" or "error" generic states.
 
-## Known Gaps
+- The light/dark theme toggle behavior: transactional surfaces and trading dashboards support dynamic theme switching (default dark `#0b0e11`, toggle class `.light` for light mode `#f9fafb`).
+- Chart canvases (TradingView Lightweight Charts) reactively switch grid and background styles using the document class name observer.
 
-- The dembrandt frequency analyzer captured `#eaecef` (light hairline, count 1022) as the highest-frequency token. The brand-defining `{colors.primary}` (#FCD535) appears far less frequently because it's used scarcely as accent — its system role had to be confirmed from screenshots.
-- BinanceNova and BinancePlex weight-axis values are not formalized as variable-font tokens — only the static weights observed in screenshots are documented.
-- Animation and transition timings (chart redraws, price-change flashes) are not in scope.
-- Form validation states beyond `{component.text-input-on-light}` defaults are not extracted — error / success input variants would need a sign-up or order-confirmation flow to confirm.
-- The trading dashboard surfaces (Spot / Futures / Margin) were not in the analyzed URL set; their order book, candlestick chart configuration, and position-management cards are not documented here.
-- The light/dark theme toggle behavior (whether transactional pages can be forced dark by user preference) is product behavior, not extracted from the marketing surfaces.
+## Dual-Theme Color Variables (Polymarket Up/Down)
+
+### Dark Theme (Default)
+- **Canvas / Background**: oklch(0.16 0.012 250) (`#0b0e11`)
+- **Card Surface**: oklch(0.20 0.014 250) (`#1e2329`)
+- **Interactive Hover**: oklch(0.235 0.014 250) (`#2b3139`)
+- **Hairlines / Borders**: oklch(0.30 0.012 250) (`#2b3139`)
+- **Muted Text**: oklch(0.66 0.018 250) (`#707a8a`)
+- **Trading Up (Green)**: oklch(0.76 0.18 155) (`#0ecb81`)
+- **Trading Down (Red)**: oklch(0.66 0.23 18) (`#f6465d`)
+
+### Light Theme (`html.light`)
+- **Canvas / Background**: oklch(0.98 0.005 250) (`#f9fafb`)
+- **Card Surface**: oklch(1.0 0.0 250) (`#ffffff`)
+- **Interactive Hover**: oklch(0.96 0.005 250) (`#f3f4f6`)
+- **Hairlines / Borders**: oklch(0.90 0.005 250) (`#e5e7eb`)
+- **Muted Text**: oklch(0.55 0.015 250) (`#6b7280`)
+- **Trading Up (Green)**: oklch(0.70 0.18 155) (`#0c9f65` - darker for white background readability)
+- **Trading Down (Red)**: oklch(0.60 0.23 18) (`#d9384d` - darker for white background readability)

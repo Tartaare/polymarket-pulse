@@ -100,3 +100,27 @@ Terminé.
 - `npx tsc --noEmit` : OK.
 - `npm run test` : OK.
 - `npm run build` : OK.
+
+---
+
+# SPRINT 5 - UI/UX Polymarket Up/Down Crypto
+
+# Date :
+2026-06-25
+
+# Statut :
+Terminé.
+
+# Composants & Améliorations :
+- **Source de données de résolution** : Connexion au WebSocket Polymarket RTDS (`wss://ws-live-data.polymarket.com` via topic `crypto_prices_chainlink`) comme source de prix faisant foi pour le sous-jacent (BTC/ETH/SOL/XRP) avec fallback Binance si nécessaire.
+- **Visualisations graphiques** : Remplacement du graphique existant par TradingView Lightweight Charts supportant 3 modes : probabilités UP (0-100%), ligne de prix du sous-jacent, et chandeliers japonais (bougies 1m cumulées à la volée).
+- **Ligne cible et label flottant** : Traçage de la ligne cible (strike price à battre) avec un label "target" flottant qui suit le Y-coordinate de la cible et affiche une flèche adaptative (▼ vers le bas si le prix actuel est au-dessus du target, ▲ vers le haut si le prix actuel est en dessous).
+- **Fuseau horaire personnalisé** : Intégration d'un hook `useTimezone` persistant en localStorage et d'un sélecteur (ET vs local) dans le Header. Tous les affichages de dates et d'intervalles de marchés s'adaptent dynamiquement au fuseau de l'utilisateur.
+- **Refonte Ticket d'Ordre** : Implémentation de 3 modes dans le ticket (Limite avec calculatrice bidirectionnelle shares/dollars et paliers de 1¢, Marché avec presets, 1-Tap buy montrant directement les gains potentiels) et CTA explicites (Acheter UP / Vendre DOWN).
+- **Navigation & Sidebar** : Barre de navigation temporelle (Passé déroulant avec sens de résolution, pills horaires de position active, bouton Live et More) et sidebar de scannage des opportunités live d'autres marchés.
+- **Dual-Theme Support** : Ajout du mode Jour (palette claire) en plus du mode Nuit (palette sombre par défaut), avec synchronisation en direct des arrière-plans et des grilles de graphiques TradingView via un MutationObserver sur la classe du document HTML.
+
+# Validation :
+- `npx tsc --noEmit` : OK.
+- `npm run test` : OK.
+- `npm run build` : OK.
