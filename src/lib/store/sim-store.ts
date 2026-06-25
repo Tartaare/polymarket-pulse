@@ -172,6 +172,10 @@ type SimStoreHook = {
 
 let orderCounter = 0;
 
+function shouldPersistStateChange(partial: Partial<SimState>): boolean {
+  return "markets" in partial || "portfolio" in partial;
+}
+
 function emptyPortfolio(): Portfolio {
   return {
     cash: STARTING_CASH,
@@ -208,7 +212,7 @@ function createSimStore(initializer: (set: SimStoreApi["setState"], get: SimStor
     setState: (partial) => {
       const nextPartial = typeof partial === "function" ? partial(state) : partial;
       state = { ...state, ...nextPartial };
-      if (state.initialized) persist();
+      if (state.initialized && shouldPersistStateChange(nextPartial)) persist();
       listeners.forEach((listener) => listener());
     },
     subscribe: (listener) => {
@@ -571,8 +575,8 @@ export const useSimStore = createSimStore((set, get) => ({
 
     set({
       markets: changed ? markets : state.markets,
-      books: match.books,
-      portfolio,
+      books: match.changed ? match.books : state.books,
+      portfolio: changed ? portfolio : state.portfolio,
       lastTick: now,
       lastBookSnapshotAt: now - state.lastBookSnapshotAt > BOOK_SNAPSHOT_INTERVAL_MS ? now : state.lastBookSnapshotAt,
       lastEquityAt: now - state.lastEquityAt > EQUITY_INTERVAL_MS ? now : state.lastEquityAt,
