@@ -30,3 +30,11 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+notes-frontend.md
+notes-backend.md
+/screenshots
+/html/
+/.data/
+
+/html

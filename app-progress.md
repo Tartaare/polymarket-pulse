@@ -124,3 +124,70 @@ Terminé.
 - `npx tsc --noEmit` : OK.
 - `npm run test` : OK.
 - `npm run build` : OK.
+
+---
+
+# SPRINT 6 - Correction diagnostics CSS Tailwind v4
+
+# Date :
+2026-06-25
+
+# Statut :
+Terminé.
+
+# Correction :
+- Remplacement de la directive d'import Tailwind de `@import "tailwindcss" source(none);` par `@import "tailwindcss";` pour rester compatible avec l'analyseur CSS standard de l'éditeur.
+- Ajout d'une configuration workspace VS Code `.vscode/settings.json` avec `css.lint.unknownAtRules = ignore` pour éviter les faux positifs sur les directives Tailwind v4 (`@source`, `@theme`, `@utility`, `@custom-variant`).
+
+# Validation :
+- `npx tsc --noEmit` : OK.
+- `npm run build` : OK.
+
+# Risques restants :
+- Les diagnostics CSS réapparaîtront si le fichier est ouvert dans un éditeur qui ignore la configuration workspace ou si les directives Tailwind v4 sont analysées sans support Tailwind.
+
+---
+
+# SPRINT 7 - Correction refresh SSR timezone
+
+# Date :
+2026-06-25
+
+# Statut :
+Terminé.
+
+# Correction :
+- Suppression du chargement `require()` dans `src/routes/__root.tsx` utilisé par `TimezoneToggle`.
+- Import direct du hook `useTimezone`, déjà compatible SSR grâce à son garde-fou `typeof window === "undefined"`.
+- Le rechargement navigateur ne déclenche plus l'exception serveur `ReferenceError: require is not defined`.
+
+# Validation :
+- `npx tsc --noEmit` : OK.
+- `npm run build` : OK.
+- Requête locale sur `http://127.0.0.1:5173/` en mode dev : `200`.
+
+# Risques restants :
+- Aucun identifié sur le flux timezone; le correctif reste localisé au shell racine SSR.
+
+---
+
+# SPRINT 8 - Correction refresh boucle page marché
+
+# Date :
+2026-06-25
+
+# Statut :
+Terminé.
+
+# Correction :
+- Ajout d'une exclusion Vite `**/.data/**` pour empêcher les écritures SQLite (`polysim.db`, WAL/SHM) de déclencher un full reload navigateur en développement.
+- Réduction de la persistance `/api/state` aux changements métier persistables (`markets`, `portfolio`) au lieu de chaque tick temps réel.
+- Conservation des mises à jour de carnet en mémoire live et des snapshots dédiés, sans écrire l'état applicatif complet à chaque seconde.
+
+# Validation :
+- `npx tsc --noEmit` : OK.
+- `npm run build` : OK.
+- `npm run test` : OK.
+
+# Risques restants :
+- Les snapshots de carnet restent écrits périodiquement dans SQLite, mais `.data/**` est ignoré par le watcher Vite.

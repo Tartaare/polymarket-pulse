@@ -1,192 +1,40 @@
 import { useSyncExternalStore } from "react";
-import { applyPriceChange, bookFromClob, createEmptyMarketBook, displayPrice, type ClobBookPayload } from "../sim/orderbook";
-import { estimateExecution, matchAgainstBook } from "../sim/matching";
+import { applyPriceChange, bookFromClob, createEmptyMarketBook, type ClobBookPayload } from "../sim/orderbook";
+import { matchAgainstBook } from "../sim/matching";
 import { applyFillsToPortfolio, totalReserved } from "../sim/portfolio";
-async function fetchAppState(): Promise<any> {
-  try {
-    const res = await fetch("/api/state");
-    if (!res.ok) return null;
-    const data = await res.json();
-    return data.state;
-  } catch (err) {
-    console.error("Failed to fetch app state from server:", err);
-    return null;
-  }
-}
-
-async function saveAppState(state: any): Promise<void> {
-  try {
-    await fetch("/api/state", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ state }),
-    });
-  } catch (err) {
-    console.error("Failed to save app state to server:", err);
-  }
-}
-
-async function saveBookSnapshots(books: any): Promise<void> {
-  try {
-    await fetch("/api/state/snapshot", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ books, ts: Date.now() }),
-    });
-  } catch (err) {
-    console.error("Failed to save book snapshots to server:", err);
-  }
-}
-
-function readIndexedDbAppState(): Promise<any> {
-  return new Promise((resolve) => {
-    if (typeof indexedDB === "undefined") return resolve(null);
-    const request = indexedDB.open("polysim-polymarket-v1", 1);
-    request.onerror = () => resolve(null);
-    request.onsuccess = () => {
-      const db = request.result;
-      if (!db.objectStoreNames.contains("app_state")) {
-        db.close();
-        return resolve(null);
-      }
-      try {
-        const tx = db.transaction("app_state", "readonly");
-        const getReq = tx.objectStore("app_state").get("current");
-        getReq.onerror = () => resolve(null);
-        getReq.onsuccess = () => {
-          resolve(getReq.result || null);
-          db.close();
-        };
-      } catch {
-        resolve(null);
-        db.close();
-      }
-    };
-  });
-}
-
-async function performIndexedDbMigration(): Promise<any> {
-  if (typeof window === "undefined") return null;
-  const localState = await readIndexedDbAppState();
-  if (!localState || Object.keys(localState).length === 0) return null;
-  
-  try {
-    const res = await fetch("/api/state/migrate", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ state: localState }),
-    });
-    if (res.ok) {
-      const data = await res.json();
-      if (data.ok && data.migrated) {
-        // Migration successful, delete indexedDB to avoid running it again
-        indexedDB.deleteDatabase("polysim-polymarket-v1");
-        console.log("Successfully migrated local IndexedDB data to server SQLite and deleted local DB.");
-      }
-      return localState;
-    }
-  } catch (err) {
-    console.error("Error during IndexedDB migration:", err);
-  }
-  return null;
-}
-
 import { updateMarketStatus } from "../polymarket/normalize";
-import type {
-  EquityPoint,
-  Fill,
-  Market,
-  MarketBook,
-  Order,
-  OrderStatus,
-  PolymarketOrderType,
-  Outcome,
-  OutcomeBook,
-  Portfolio,
-  Side,
-} from "../sim/types";
+import type { Market, MarketBook, Order, Outcome } from "../sim/types";
 
-const STARTING_CASH = 10_000;
-const DISCOVERY_INTERVAL_MS = 30_000;
-const BOOK_SNAPSHOT_INTERVAL_MS = 10_000;
-const EQUITY_INTERVAL_MS = 5_000;
+import { fetchAppState, saveAppState, saveBookSnapshots, performIndexedDbMigration } from "./sim-store-persistence";
+import {
+  STARTING_CASH,
+  DISCOVERY_INTERVAL_MS,
+  BOOK_SNAPSHOT_INTERVAL_MS,
+  EQUITY_INTERVAL_MS,
+  type SimState,
+  type SimStoreApi,
+  type SimStoreHook,
+  emptyPortfolio,
+  shouldPersistStateChange,
+  findMarketByToken,
+  outcomeByToken,
+  getShadowOutcomeBook,
+  validateOrder,
+  shouldExecuteImmediately,
+  statusAfterFill,
+  matchRestingOrders,
+  equityPoint,
+  isOpenStatus,
+  nextOrderId,
+  clampPrice,
+  csvCell,
+} from "./sim-store-helpers";
 
-interface PlaceResult {
-  ok: boolean;
-  message?: string;
-  orderId?: string;
-}
+// Re-export public selectors and types for consumers
+export { selectDisplayPrice, selectMidpoint } from "./sim-store-helpers";
+export type { SimState, PlaceResult } from "./sim-store-helpers";
 
-interface SimState {
-  initialized: boolean;
-  loadingMarkets: boolean;
-  marketError: string | null;
-  clobStatus: "idle" | "connecting" | "live" | "degraded";
-  markets: Record<string, Market>;
-  books: Record<string, MarketBook>;
-  portfolio: Portfolio;
-  lastTick: number;
-  lastDiscoveryAt: number;
-  lastBookSnapshotAt: number;
-  lastEquityAt: number;
-
-  init: () => void;
-  refreshMarkets: () => Promise<void>;
-  checkResolvedMarkets: () => Promise<void>;
-  hydrateBooks: (marketIds?: string[]) => Promise<void>;
-  applyClobBook: (payload: ClobBookPayload) => void;
-  applyClobPriceChanges: (changes: Array<{ asset_id: string; price: string; size: string; side: Side; hash?: string }>, ts: number) => void;
-  applyLastTrade: (input: { tokenId: string; price: number; size: number; side: Side; ts: number; feeRateBps?: number }) => void;
-  applyBestBidAsk: (tokenId: string, bestBid: number | null, bestAsk: number | null, ts: number) => void;
-  applyTickSizeChange: (tokenId: string, newTickSize: number, ts: number) => void;
-  markMarketResolved: (conditionId: string, winningTokenId?: string, winningOutcome?: string) => void;
-  setClobStatus: (status: SimState["clobStatus"]) => void;
-  tick: () => void;
-  placeOrder: (input: {
-    marketId: string;
-    outcome: Outcome;
-    side: Side;
-    type: PolymarketOrderType;
-    limitCents?: number;
-    sizeShares: number;
-    postOnly?: boolean;
-    expiresAt?: number;
-  }) => PlaceResult;
-  cancelOrder: (orderId: string) => void;
-  cancelAll: () => void;
-  redeem: (marketId: string, outcome: Outcome) => void;
-  resetPortfolio: () => void;
-  exportFillsCsv: () => string;
-}
-
-type SimStoreApi = {
-  getState: () => SimState;
-  setState: (partial: Partial<SimState> | ((state: SimState) => Partial<SimState>)) => void;
-  subscribe: (listener: () => void) => () => void;
-};
-
-type SimStoreHook = {
-  <T>(selector: (state: SimState) => T): T;
-  getState: () => SimState;
-};
-
-let orderCounter = 0;
-
-function shouldPersistStateChange(partial: Partial<SimState>): boolean {
-  return "markets" in partial || "portfolio" in partial;
-}
-
-function emptyPortfolio(): Portfolio {
-  return {
-    cash: STARTING_CASH,
-    reserved: 0,
-    positions: [],
-    orders: [],
-    fills: [],
-    equity: [],
-    sessions: [{ id: `sess_${Date.now().toString(36)}`, startedAt: Date.now(), label: "Session locale" }],
-  };
-}
+// ── Store framework ────────────────────────────────────────
 
 function createSimStore(initializer: (set: SimStoreApi["setState"], get: SimStoreApi["getState"]) => SimState): SimStoreHook {
   const listeners = new Set<() => void>();
@@ -220,15 +68,15 @@ function createSimStore(initializer: (set: SimStoreApi["setState"], get: SimStor
       if (!hydrated) {
         hydrated = true;
         void (async () => {
-          let persisted = await fetchAppState();
+          let persisted = await fetchAppState() as Record<string, unknown> | null;
           if (!persisted || Object.keys(persisted).length === 0) {
-            persisted = await performIndexedDbMigration();
+            persisted = await performIndexedDbMigration() as Record<string, unknown> | null;
           }
           if (!persisted || Object.keys(persisted).length === 0) return;
           state = {
             ...state,
             ...persisted,
-            portfolio: { ...emptyPortfolio(), ...persisted.portfolio },
+            portfolio: { ...emptyPortfolio(), ...(persisted.portfolio as Record<string, unknown>) },
             initialized: true,
           };
           listeners.forEach((item) => item());
@@ -249,6 +97,8 @@ function createSimStore(initializer: (set: SimStoreApi["setState"], get: SimStor
   useStore.getState = api.getState;
   return useStore;
 }
+
+// ── Store instance ─────────────────────────────────────────
 
 export const useSimStore = createSimStore((set, get) => ({
   initialized: false,
@@ -280,7 +130,6 @@ export const useSimStore = createSimStore((set, get) => ({
       const nextMarkets: Record<string, Market> = {};
       const nextBooks: Record<string, MarketBook> = {};
       
-      // 1. Populate next markets with fetched markets
       for (const market of data.markets) {
         nextMarkets[market.id] = { ...state.markets[market.id], ...market };
         nextBooks[market.id] = state.books[market.id] ?? createEmptyMarketBook(
@@ -291,7 +140,7 @@ export const useSimStore = createSimStore((set, get) => ({
         );
       }
       
-      // 2. Preserve old markets with active positions, open orders, or pending resolution
+      // Preserve old markets with active positions, open orders, or pending resolution
       const activeMarketIds = new Set(data.markets.map((m) => m.id));
       for (const [id, oldMarket] of Object.entries(state.markets)) {
         if (activeMarketIds.has(id)) continue;
@@ -504,7 +353,7 @@ export const useSimStore = createSimStore((set, get) => ({
     const portfolio = { ...state.portfolio };
     const market = Object.values(markets).find((item) => item.conditionId === conditionId || item.id === conditionId);
     if (!market) return;
-    const resolvedOutcome =
+    const resolvedOutcome: Outcome =
       winningTokenId && winningTokenId === market.clobTokenIds.UP ? "UP" :
       winningTokenId && winningTokenId === market.clobTokenIds.DOWN ? "DOWN" :
       winningOutcome?.toLowerCase().includes("up") || winningOutcome?.toLowerCase().includes("yes") ? "UP" : "DOWN";
@@ -713,148 +562,3 @@ export const useSimStore = createSimStore((set, get) => ({
     return rows.map((row) => row.map(csvCell).join(",")).join("\n");
   },
 }));
-
-export function selectDisplayPrice(book: MarketBook | undefined, outcome: Outcome): number | null {
-  return book ? displayPrice(book[outcome]) : null;
-}
-
-export function selectMidpoint(book: MarketBook | undefined, outcome: Outcome): number | null {
-  return book?.[outcome].mid ?? null;
-}
-
-function findMarketByToken(markets: Record<string, Market>, tokenId: string): Market | undefined {
-  return Object.values(markets).find((market) => market.clobTokenIds.UP === tokenId || market.clobTokenIds.DOWN === tokenId);
-}
-
-function outcomeByToken(market: Market, tokenId: string): Outcome | null {
-  if (market.clobTokenIds.UP === tokenId) return "UP";
-  if (market.clobTokenIds.DOWN === tokenId) return "DOWN";
-  return null;
-}
-
-function getShadowOutcomeBook(book: MarketBook, outcome: Outcome): OutcomeBook {
-  if (outcome === "UP") {
-    return book.shadowUP ?? book.UP;
-  } else {
-    return book.shadowDOWN ?? book.DOWN;
-  }
-}
-
-function validateOrder(order: Order, book: OutcomeBook, portfolio: Portfolio, feeRateBps: number): PlaceResult {
-  if (order.postOnly && (order.type === "GTC" || order.type === "GTD")) {
-    if (order.side === "BUY" && book.bestAsk != null && order.limitPrice != null && order.limitPrice >= book.bestAsk) {
-      return { ok: false, message: "Post-only would cross best ask" };
-    }
-    if (order.side === "SELL" && book.bestBid != null && order.limitPrice != null && order.limitPrice <= book.bestBid) {
-      return { ok: false, message: "Post-only would cross best bid" };
-    }
-  }
-  if (order.side === "SELL") {
-    const position = portfolio.positions.find((item) => item.tokenId === order.tokenId);
-    if (!position || position.size < order.size - 1e-9) return { ok: false, message: "Insufficient shares" };
-  }
-  if (order.side === "BUY") {
-    const estimate = estimateExecution({
-      side: order.side,
-      size: order.size,
-      book,
-      limitPrice: order.limitPrice,
-      feeRateBps,
-    });
-    const worstCase = (order.type === "GTC" || order.type === "GTD") && !shouldExecuteImmediately(order, book)
-      ? order.size * (order.limitPrice ?? 0)
-      : estimate.cost + estimate.fee;
-    if (worstCase > portfolio.cash - portfolio.reserved + 1e-9) return { ok: false, message: "Insufficient cash" };
-    if (order.type === "FOK" && estimate.fillable < order.size - 1e-9) return { ok: false, message: "FOK cannot fill fully" };
-  }
-  return { ok: true };
-}
-
-function shouldExecuteImmediately(order: Order, book: OutcomeBook): boolean {
-  if (order.type === "FOK" || order.type === "FAK") return true;
-  if (order.postOnly) return false;
-  if (order.limitPrice == null) return false;
-  if (order.side === "BUY") return book.bestAsk != null && order.limitPrice >= book.bestAsk;
-  return book.bestBid != null && order.limitPrice <= book.bestBid;
-}
-
-function statusAfterFill(order: Order, remaining: number): OrderStatus {
-  if (remaining <= 1e-9) return "FILLED";
-  if (order.type === "FAK") {
-    if (order.filled > 0) {
-      order.cancelledRemainder = remaining;
-      return "FILLED";
-    }
-    return "REJECTED";
-  }
-  return order.filled > 0 ? "PARTIALLY_FILLED" : "OPEN";
-}
-
-function matchRestingOrders(opts: {
-  markets: Record<string, Market>;
-  books: Record<string, MarketBook>;
-  portfolio: Portfolio;
-  now: number;
-}): { books: Record<string, MarketBook>; portfolio: Portfolio; changed: boolean } {
-  let books = { ...opts.books };
-  let portfolio = { ...opts.portfolio, orders: opts.portfolio.orders.map((order) => ({ ...order })) };
-  const fills: Fill[] = [];
-  let changed = false;
-  for (const order of portfolio.orders) {
-    if (!isOpenStatus(order.status) || (order.type !== "GTC" && order.type !== "GTD")) continue;
-    const market = opts.markets[order.marketId];
-    const book = books[order.marketId];
-    if (!market || !book) continue;
-    const shadowBook = getShadowOutcomeBook(book, order.outcome);
-    if (!shouldExecuteImmediately(order, shadowBook)) continue;
-    const res = matchAgainstBook({ order, book: shadowBook, feeRateBps: market.feeRateBps, ts: opts.now });
-    if (res.fills.length === 0) continue;
-    order.filled = order.size - res.remaining;
-    order.avgFillPrice = order.filled > 0 ? res.totalCost / order.filled : order.avgFillPrice;
-    order.feesPaid += res.totalFee;
-    order.grossProceeds += res.totalCost;
-    order.status = statusAfterFill(order, res.remaining);
-    order.updatedAt = opts.now;
-    books[order.marketId] = {
-      ...book,
-      shadowUP: order.outcome === "UP" ? res.newBook : (book.shadowUP ?? book.UP),
-      shadowDOWN: order.outcome === "DOWN" ? res.newBook : (book.shadowDOWN ?? book.DOWN),
-      updatedAt: opts.now,
-    } as MarketBook;
-    fills.push(...res.fills);
-    changed = true;
-  }
-  if (fills.length > 0) portfolio = applyFillsToPortfolio(portfolio, fills);
-  return { books, portfolio, changed };
-}
-
-function equityPoint(portfolio: Portfolio, markets: Record<string, Market>, books: Record<string, MarketBook>, ts: number): EquityPoint {
-  let markValue = 0;
-  for (const position of portfolio.positions) {
-    if (position.size <= 0) continue;
-    const market = markets[position.marketId];
-    const price = books[position.marketId]?.[position.outcome].mid ?? market?.outcomePrices[position.outcome] ?? position.avgPrice;
-    markValue += position.size * price;
-  }
-  const equity = portfolio.cash + markValue;
-  const netPnl = equity - STARTING_CASH;
-  const fees = portfolio.fills.reduce((acc, fill) => acc + fill.fee, 0);
-  return { ts, equity, cash: portfolio.cash, grossPnl: netPnl + fees, netPnl };
-}
-
-function isOpenStatus(status: OrderStatus): boolean {
-  return status === "OPEN" || status === "PARTIALLY_FILLED";
-}
-
-function nextOrderId(): string {
-  orderCounter += 1;
-  return `ord_${Date.now().toString(36)}_${orderCounter}`;
-}
-
-function clampPrice(price: number): number {
-  return Math.max(0.001, Math.min(0.999, price));
-}
-
-function csvCell(value: string): string {
-  return `"${value.replaceAll("\"", "\"\"")}"`;
-}

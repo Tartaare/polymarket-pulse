@@ -17,6 +17,7 @@ import "@fontsource/jetbrains-mono/400.css";
 import "@fontsource/jetbrains-mono/500.css";
 import "@fontsource/jetbrains-mono/600.css";
 import { Toaster } from "@/components/ui/sonner";
+import { useTimezone } from "@/hooks/use-timezone";
 import { useSimEngine } from "@/lib/store/use-sim-engine";
 
 function NotFoundComponent() {
@@ -184,8 +185,7 @@ function ThemeToggle() {
 }
 
 function TimezoneToggle() {
-  const { useTimezone: useTz, setTimezone: setTz } = await_tz_import();
-  const [mode, setMode] = useTz();
+  const [mode, setMode] = useTimezone();
   return (
     <button
       type="button"
@@ -200,12 +200,5 @@ function TimezoneToggle() {
       {mode === "et" ? "ET" : "Local"}
     </button>
   );
-}
-
-/** Lazy-import workaround to avoid top-level import of a client-side hook in SSR-rendered root */
-function await_tz_import() {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const mod = require("@/hooks/use-timezone");
-  return { useTimezone: mod.useTimezone as typeof import("@/hooks/use-timezone").useTimezone, setTimezone: mod.setTimezone as typeof import("@/hooks/use-timezone").setTimezone };
 }
 
