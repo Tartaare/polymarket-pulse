@@ -825,28 +825,49 @@ html.light {
 }
 
 .order-ticket__header {
-  display: flex;
+  display: grid;
+  grid-template-columns: 2.25rem minmax(0, 1fr);
   align-items: center;
-  justify-content: space-between;
+  gap: 0.625rem;
   border-bottom: 1px solid var(--color-hairline);
   padding-bottom: 0.75rem;
 }
 
 .order-ticket__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: 0.5rem;
+  background-color: var(--color-surface-2);
+  border: 1px solid var(--color-hairline);
   font-weight: 700;
   font-size: 1.125rem;
   color: var(--color-primary);
 }
 
+.order-ticket__market-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+}
+
 .order-ticket__title {
   font-size: 0.875rem;
   font-weight: 600;
+  line-height: 1.25;
   color: var(--color-foreground);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .order-ticket__status {
-  font-size: 0.875rem;
+  font-size: 0.75rem;
   font-weight: 700;
+  line-height: 1.2;
 }
 
 .order-ticket__side-tabs {
@@ -908,6 +929,50 @@ html.light {
   box-shadow: 0 1px 3px rgba(0,0,0,0.1);
 }
 
+.order-ticket__outcomes {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.5rem;
+}
+
+.order-ticket__outcome {
+  min-height: 2.25rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.375rem;
+  border: 1px solid var(--color-hairline);
+  border-radius: 0.5rem;
+  background-color: var(--color-surface-2);
+  color: var(--color-muted-foreground);
+  font-size: 0.8125rem;
+  font-weight: 700;
+  transition: background-color 150ms, border-color 150ms, color 150ms, transform 150ms;
+}
+
+.order-ticket__outcome:hover {
+  color: var(--color-foreground);
+  border-color: var(--color-muted-foreground);
+}
+
+.order-ticket__outcome--up-active {
+  border-color: color-mix(in oklch, var(--color-up) 45%, var(--color-hairline));
+  background-color: color-mix(in oklch, var(--color-up) 16%, var(--color-surface));
+  color: var(--color-up);
+}
+
+.order-ticket__outcome--down-active {
+  border-color: color-mix(in oklch, var(--color-down) 45%, var(--color-hairline));
+  background-color: color-mix(in oklch, var(--color-down) 16%, var(--color-surface));
+  color: var(--color-down);
+}
+
+.order-ticket__outcome-label,
+.order-ticket__outcome-price {
+  min-width: 0;
+  white-space: nowrap;
+}
+
 .order-ticket__body {
   display: flex;
   flex-direction: column;
@@ -920,10 +985,25 @@ html.light {
   gap: 0.375rem;
 }
 
+.order-ticket__field--line,
+.order-ticket__field-line {
+  min-height: 2.5rem;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.order-ticket__field--positions {
+  gap: 0.5rem;
+}
+
 .order-ticket__label {
   font-size: 0.75rem;
   color: var(--color-muted-foreground);
   font-weight: 500;
+  flex: 0 0 auto;
 }
 
 .order-ticket__input {
@@ -935,6 +1015,13 @@ html.light {
   color: var(--color-foreground);
   transition: border-color 150ms;
   width: 100%;
+}
+
+.order-ticket__input--inline {
+  width: min(9rem, 58%);
+  height: 2.25rem;
+  text-align: right;
+  font-weight: 600;
 }
 
 .order-ticket__input:focus {
@@ -965,9 +1052,66 @@ html.light {
   padding-right: 2rem;
 }
 
+.order-ticket__field--line .order-ticket__select {
+  width: auto;
+  min-width: 7.75rem;
+  height: 2rem;
+  padding-top: 0.25rem;
+  padding-bottom: 0.25rem;
+  font-size: 0.75rem;
+}
+
 .order-ticket__select:focus {
   border-color: var(--color-primary);
   outline: none;
+}
+
+.order-ticket__stepper {
+  height: 2.25rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  border: 1px solid var(--color-hairline);
+  border-radius: 0.5rem;
+  background-color: var(--color-surface-2);
+  overflow: hidden;
+}
+
+.order-ticket__step-btn {
+  width: 2rem;
+  height: 100%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-muted-foreground);
+  font-size: 0.875rem;
+  font-weight: 700;
+  transition: background-color 150ms, color 150ms;
+}
+
+.order-ticket__step-btn:hover {
+  background-color: var(--color-surface);
+  color: var(--color-foreground);
+}
+
+.order-ticket__price-input {
+  width: 3.75rem;
+  height: 100%;
+  border: 0;
+  border-left: 1px solid var(--color-hairline);
+  background: transparent;
+  color: var(--color-foreground);
+  text-align: right;
+  font-size: 0.875rem;
+  font-weight: 700;
+  outline: none;
+}
+
+.order-ticket__cent-sign {
+  padding: 0 0.375rem 0 0.125rem;
+  color: var(--color-muted-foreground);
+  font-size: 0.75rem;
+  font-weight: 700;
 }
 
 .order-ticket__quick-btns {
@@ -975,7 +1119,7 @@ html.light {
   align-items: center;
   gap: 0.25rem;
   overflow-x: auto;
-  padding-bottom: 0.25rem;
+  justify-content: flex-end;
 }
 
 .order-ticket__quick-btn {
@@ -999,6 +1143,27 @@ html.light {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 0.375rem;
+}
+
+.order-ticket__match-line {
+  display: flex;
+  justify-content: flex-end;
+  min-height: 1.375rem;
+}
+
+.order-ticket__match-badge {
+  display: inline-flex;
+  max-width: 100%;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9999px;
+  border: 1px solid currentColor;
+  background-color: color-mix(in oklch, currentColor 12%, transparent);
+  padding: 0.1875rem 0.5rem;
+  font-size: 0.6875rem;
+  font-weight: 700;
+  line-height: 1.1;
+  white-space: nowrap;
 }
 
 .order-ticket__summary {
@@ -1030,17 +1195,26 @@ html.light {
   font-weight: 600;
   border-radius: 0.5rem;
   font-size: 0.875rem;
-  transition: background-color 150ms;
+  transition: background-color 150ms, box-shadow 150ms, transform 150ms;
   cursor: pointer;
+  box-shadow: 0 2px 0 color-mix(in oklch, var(--color-primary) 50%, black);
 }
 
 .order-ticket__cta:hover:not(:disabled) {
   opacity: 0.95;
+  transform: translateY(1px);
+  box-shadow: 0 1px 0 color-mix(in oklch, var(--color-primary) 45%, black), inset 0 1px 0 rgba(255,255,255,0.14);
+}
+
+.order-ticket__cta:active:not(:disabled) {
+  transform: translateY(2px) scale(0.995);
+  box-shadow: inset 0 2px 6px rgba(0,0,0,0.18);
 }
 
 .order-ticket__cta:disabled {
   opacity: 0.4;
   cursor: not-allowed;
+  box-shadow: none;
 }
 
 .order-ticket__1tap-title {
@@ -1072,6 +1246,7 @@ html.light {
 .order-ticket__1tap-btn:hover:not(:disabled) {
   background-color: var(--color-surface-2);
   border-color: var(--color-muted-foreground);
+  transform: translateY(1px);
 }
 
 .order-ticket__1tap-btn:disabled {
@@ -1088,6 +1263,30 @@ html.light {
 .order-ticket__1tap-gain {
   font-size: 0.625rem;
   font-weight: 600;
+}
+
+@media (max-width: 420px) {
+  .order-ticket {
+    padding: 0.875rem;
+  }
+
+  .order-ticket__field--line,
+  .order-ticket__field-line {
+    gap: 0.5rem;
+  }
+
+  .order-ticket__input--inline {
+    width: min(8rem, 56%);
+  }
+
+  .order-ticket__outcome {
+    gap: 0.25rem;
+    font-size: 0.75rem;
+  }
+
+  .order-ticket__quick-btn {
+    padding-inline: 0.4375rem;
+  }
 }
 
 /* --- Crypto Sidebar --- */
