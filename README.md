@@ -18,7 +18,7 @@ Application locale non-commerciale de paper trading pour s'entraîner sur les vr
 
 - Page `Markets` : filtres par actif, horizon, statut et recherche slug/question/token.
 - Page détail marché : conditionId, token IDs, état CLOB, bid/ask, spread, mid, liquidité visible et derniers fills paper.
-- Ticket d'ordre : estimation coût/produit, frais, slippage, break-even, expiration GTD et validation post-only.
+- Ticket d'ordre : modes Limite, Marché et 1-Tap, outcomes Up/Down persistants, estimation coût/produit, frais, slippage, break-even et expiration GTD.
 - Page `Portfolio` : cash, réservé, PnL brut/net, frais, positions, ordres ouverts, historique et export CSV.
 - Rachat paper des positions après résolution reçue depuis le WebSocket Polymarket.
 

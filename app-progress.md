@@ -191,3 +191,28 @@ Terminé.
 
 # Risques restants :
 - Les snapshots de carnet restent écrits périodiquement dans SQLite, mais `.data/**` est ignoré par le watcher Vite.
+
+---
+
+# SPRINT 9 - Refonte Ticket Trading Polymarket
+
+# Date :
+2026-06-26
+
+# Statut :
+Terminé.
+
+# Composants & Améliorations :
+- **Header contextualisé** : le ticket affiche désormais l'icône crypto, le titre de marché complet avec horizon, puis l'outcome sélectionné en couleur.
+- **Outcomes Up/Down stables** : les boutons Up/Down sont de vrais contrôles visibles dans les modes Limite, Marché et 1-Tap, avec état actif vert/rouge et état inactif neutre.
+- **Prix limite compact** : ligne unique avec label, champ éditable, contrôles `-` / `+`, step aligné sur le tick du marché avec minimum fonctionnel de `0.10¢`.
+- **Positions Polymarket-style** : champ numérique sans incréments natifs visibles, raccourcis `-100`, `-10`, `+10`, `+100`, et indicateur `correspondant` basé sur la quantité immédiatement exécutable dans le carnet.
+- **Montant, expiration et CTA** : lignes compactes label/contrôle pour Montant et Expiration, bouton de trading avec feedback pressed au hover/active.
+
+# Validation :
+- `npx tsc --noEmit` : OK.
+- `npm run build` : OK.
+- `npm run test` : OK.
+
+# Risques restants :
+- Aucun changement du moteur paper trading, des APIs ou du schéma SQLite; le risque est limité au rendu responsive du ticket.
